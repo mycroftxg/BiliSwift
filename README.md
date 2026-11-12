@@ -46,10 +46,10 @@ hdiutil create -volname "BiliSwift" -srcfolder <包含 BiliSwift.app 与 Applica
 
 ## 已知限制
 
-- 未使用 Developer ID 签名/公证，首次打开需右键「打开」或在终端执行
+- 未使用 Developer ID 签名/公证，首次打开需在设置内解除限制或在终端执行
   `sudo xattr -dr com.apple.quarantine /Applications/BiliSwift.app`。
 - 会员高级格式（HDR / 杜比视界 / 全景声）取决于片源、账号权益与输出设备，未在全部硬件上验证。
-- 直播弹幕链路仍在完善；接口随时可能变化。
+- 直播链路仍在完善；接口随时可能变化。
 
 ## 目录
 
