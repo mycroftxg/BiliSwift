@@ -1,6 +1,6 @@
 # BiliSwift · 原生 macOS 哔哩哔哩客户端
 
-第三方原生 macOS 哔哩哔哩客户端。SwiftUI + Liquid Glass，尽可能贴近 Apple TV / macOS 原生体验，不使用内嵌网页作为主要界面。
+第三方原生 macOS 哔哩哔哩客户端。SwiftUI + Liquid Glass，尽可能贴近 macOS 原生体验。
 
 - 系统要求：macOS 26.0+、Apple Silicon（arm64）
 - 技术栈：Swift 6 / SwiftUI / AVFoundation / Network.framework，无第三方依赖
