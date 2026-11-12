@@ -215,10 +215,20 @@ import HarborCore
     try Data("abc".utf8).write(to: file)
     try UpdateController.verify(file, size: 3, digest: digest)
     try Data("abd".utf8).write(to: file)
-    #expect(throws: BiliError.self) {
+    #expect(throws: (any Error).self) {
         try UpdateController.verify(file, size: 3, digest: digest)
     }
-    #expect(throws: BiliError.self) {
+    #expect(throws: (any Error).self) {
         try UpdateController.verify(file, size: 4, digest: digest)
     }
+}
+
+@Test func updaterMatchesDigestToRequestedReleaseAsset() {
+    let path = "/owner/repo/releases/download/v1.2.3/BiliSwift-1.2.3.dmg"
+    let digest = String(repeating: "a", count: 64)
+    let otherDigest = String(repeating: "b", count: 64)
+    let expectedRow = "<li><a href=\"\(path)\">Package</a><clipboard-copy value=\"sha256:\(digest)\"></clipboard-copy></li>"
+    let otherRow = "<li><clipboard-copy value=\"sha256:\(otherDigest)\"></clipboard-copy></li>"
+    #expect(UpdateController.releasePageDigest(in: otherRow + expectedRow, assetPath: path) == digest)
+    #expect(UpdateController.releasePageDigest(in: otherRow, assetPath: path) == nil)
 }

@@ -1,12 +1,17 @@
 import SwiftUI
 import AppKit
 import CryptoKit
-import HarborCore
 
 @MainActor @Observable final class UpdateController {
     private static let repository = "mycroftxg/BiliSwift"
     private static let releasesURL = URL(string: "https://github.com/\(repository)/releases")!
     private static let latestURL = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+
+    private struct UpdateError: LocalizedError {
+        let errorDescription: String?
+
+        init(_ message: String) { errorDescription = message }
+    }
 
     enum Source: String, CaseIterable, Identifiable {
         case auto = "自动"
@@ -47,7 +52,8 @@ import HarborCore
     struct Update {
         let version: String
         let notes: String?
-        let asset: Release.Asset
+        let filename: String
+        let size: Int64?
         let digest: String
         let url: URL
         let page: URL
@@ -82,32 +88,74 @@ import HarborCore
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             request.setValue("BiliSwift/\(currentVersion)", forHTTPHeaderField: "User-Agent")
             let (data, response) = try await session.data(for: request)
-            try Self.requireOK(response)
-            let info = try JSONDecoder().decode(Release.self, from: data)
-            guard !info.draft, !info.prerelease, info.tag_name.hasPrefix("v"),
-                  let latest = Self.versionParts(String(info.tag_name.dropFirst())),
-                  let current = Self.versionParts(currentVersion) else {
-                throw BiliError.invalid("GitHub 发布版本格式不受支持")
+            if let http = response as? HTTPURLResponse, [403, 429].contains(http.statusCode) {
+                release = try await checkReleasePage()
+            } else {
+                try Self.requireOK(response)
+                let info = try JSONDecoder().decode(Release.self, from: data)
+                guard !info.draft, !info.prerelease else {
+                    throw UpdateError("GitHub 尚未发布稳定版本")
+                }
+                if let version = try newerVersion(for: info.tag_name) {
+                    let filename = "BiliSwift-\(version).dmg"
+                    guard let asset = info.assets.first(where: { $0.name == filename && $0.state == "uploaded" }),
+                          asset.size > 0, let digest = Self.sha256(from: asset.digest) else {
+                        throw UpdateError("GitHub 尚未提供完整安装包及校验信息")
+                    }
+                    release = makeUpdate(version: version, notes: info.notes, size: asset.size, digest: digest)
+                }
             }
-            guard current.lexicographicallyPrecedes(latest) else {
-                status = "已是最新版本（\(currentVersion)）"
-                return
-            }
-            let version = String(info.tag_name.dropFirst())
-            let name = "BiliSwift-\(version).dmg"
-            guard let asset = info.assets.first(where: { $0.name == name && $0.state == "uploaded" }),
-                  asset.size > 0,
-                  let digest = Self.sha256(from: asset.digest) else {
-                throw BiliError.invalid("GitHub 尚未提供完整安装包及校验信息")
-            }
-            let page = Self.releasesURL.appending(path: "tag").appending(path: info.tag_name)
-            let url = Self.releasesURL.appending(path: "download").appending(path: info.tag_name).appending(path: name)
-            release = Update(version: version, notes: info.notes, asset: asset, digest: digest, url: url, page: page)
-            status = "发现新版本 \(version)"
+            status = release.map { "发现新版本 \($0.version)" } ?? "已是最新版本（\(currentVersion)）"
         } catch {
             status = ""
             self.error = "检查更新失败：\(error.localizedDescription)"
         }
+    }
+
+    private func newerVersion(for tag: String) throws -> String? {
+        let version = String(tag.dropFirst())
+        guard tag.hasPrefix("v"), let latest = Self.versionParts(version),
+              let current = Self.versionParts(currentVersion) else {
+            throw UpdateError("GitHub 发布版本格式不受支持")
+        }
+        return current.lexicographicallyPrecedes(latest) ? version : nil
+    }
+
+    private func makeUpdate(version: String, notes: String?, size: Int64?, digest: String) -> Update {
+        let tag = "v" + version
+        let filename = "BiliSwift-\(version).dmg"
+        let page = Self.releasesURL.appending(path: "tag").appending(path: tag)
+        let url = Self.releasesURL.appending(path: "download").appending(path: tag).appending(path: filename)
+        return Update(version: version, notes: notes, filename: filename, size: size, digest: digest, url: url, page: page)
+    }
+
+    private func checkReleasePage() async throws -> Update? {
+        let (_, response) = try await session.data(from: Self.releasesURL.appending(path: "latest"))
+        try Self.requireOK(response)
+        guard let page = response.url, page.host == Self.releasesURL.host,
+              page.path == Self.releasesURL.appending(path: "tag").appending(path: page.lastPathComponent).path else {
+            throw UpdateError("GitHub 限制了 API 请求，暂时无法确认最新发布版本")
+        }
+        let tag = page.lastPathComponent
+        guard let version = try newerVersion(for: tag) else { return nil }
+        let assetsPage = Self.releasesURL.appending(path: "expanded_assets").appending(path: tag)
+        let (data, assetsResponse) = try await session.data(from: assetsPage)
+        try Self.requireOK(assetsResponse)
+        let assetPath = "/\(Self.repository)/releases/download/\(tag)/BiliSwift-\(version).dmg"
+        guard assetsResponse.url?.host == assetsPage.host,
+              let digest = Self.releasePageDigest(in: String(decoding: data, as: UTF8.self), assetPath: assetPath) else {
+            throw UpdateError("GitHub 限制了 API 请求，发布页暂未提供可验证的安装包")
+        }
+        return makeUpdate(version: version, notes: nil, size: nil, digest: digest)
+    }
+
+    nonisolated static func releasePageDigest(in html: String, assetPath: String) -> String? {
+        let rows = html.components(separatedBy: "</li>")
+        guard let row = rows.first(where: { $0.contains("href=\"\(assetPath)\"") }),
+              let range = row.range(of: #"value="sha256:[a-fA-F0-9]{64}""#, options: .regularExpression) else {
+            return nil
+        }
+        return sha256(from: String(row[range].dropFirst(7).dropLast()))
     }
 
     func downloadAndOpen(using source: Source) async {
@@ -126,14 +174,14 @@ import HarborCore
                 try Self.requireOK(response)
                 status = "正在校验安装包…"
                 try await Task.detached(priority: .utility) {
-                    try Self.verify(file, size: release.asset.size, digest: release.digest)
+                    try Self.verify(file, size: release.size, digest: release.digest)
                 }.value
                 try Task.checkCancellation()
 
                 let folder = FileManager.default.temporaryDirectory
                     .appending(path: "BiliSwift-\(UUID().uuidString)", directoryHint: .isDirectory)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let destination = folder.appending(path: release.asset.name)
+                let destination = folder.appending(path: release.filename)
                 do {
                     try FileManager.default.moveItem(at: file, to: destination)
                 } catch {
@@ -157,9 +205,9 @@ import HarborCore
 
     private static func requireOK(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, http.url?.scheme == "https" else {
-            throw BiliError.invalid("无效的 HTTPS 响应")
+            throw UpdateError("无效的 HTTPS 响应")
         }
-        guard http.statusCode == 200 else { throw BiliError.http(http.statusCode) }
+        guard http.statusCode == 200 else { throw UpdateError("GitHub 或下载镜像返回 HTTP \(http.statusCode)") }
     }
 
     nonisolated static func versionParts(_ version: String) -> [Int]? {
@@ -180,10 +228,10 @@ import HarborCore
         return hash
     }
 
-    nonisolated static func verify(_ file: URL, size: Int64, digest: String) throws {
+    nonisolated static func verify(_ file: URL, size: Int64?, digest: String) throws {
         let actualSize = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize
-        guard let actualSize, Int64(actualSize) == size else {
-            throw BiliError.invalid("安装包大小与 GitHub 发布记录不一致")
+        guard let actualSize, actualSize > 0, size == nil || Int64(actualSize) == size else {
+            throw UpdateError("安装包大小与 GitHub 发布记录不一致")
         }
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
@@ -192,7 +240,7 @@ import HarborCore
             hasher.update(data: block)
         }
         let actualDigest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        guard actualDigest == digest else { throw BiliError.invalid("安装包 SHA-256 校验失败") }
+        guard actualDigest == digest else { throw UpdateError("安装包 SHA-256 校验失败") }
     }
 }
 

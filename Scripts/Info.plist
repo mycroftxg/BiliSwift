@@ -9,8 +9,8 @@
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
 <key>CFBundleLocalizations</key><array><string>zh-Hans</string><string>zh_CN</string><string>en</string></array>
-<key>CFBundleShortVersionString</key><string>0.5.03</string>
-<key>CFBundleVersion</key><string>172</string>
+<key>CFBundleShortVersionString</key><string>0.5.04</string>
+<key>CFBundleVersion</key><string>173</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>

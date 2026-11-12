@@ -19,6 +19,7 @@ struct ContentView:View {
     @State private var submitted=""
     @State private var login=false
     @State private var homeJump=UUID()
+    @State private var messageRefreshID = UUID()
     @State private var nearBottom=false
     @State private var viewport=CGSize(width:1000,height:800)
     private var route:Destination { Destination(rawValue:selection) ?? .channels }
@@ -87,7 +88,10 @@ struct ContentView:View {
                         }
                     }
                     .toolbar {
-                        ToolbarItem { if !presentation.immersive { Button { Task { await reload() } } label:{ Image(systemName:"arrow.clockwise") }.help("刷新").disabled(catalog.loading) } }
+                        ToolbarItem { if !presentation.immersive { Button {
+                            if route == .messages { messageRefreshID = UUID() }
+                            else { Task { await reload() } }
+                        } label:{ Image(systemName:"arrow.clockwise") }.help("刷新").disabled(catalog.loading) } }
                         ToolbarItem { if !presentation.immersive,playback.video != nil { Button("继续播放",systemImage:"play.rectangle") { presentation.immersive=true;playback.player.playImmediately(atRate:playback.rate) } } }
                         ToolbarItem { if !presentation.immersive,!account.loggedIn { Button("登录") { login=true } } }
                     }
@@ -153,7 +157,7 @@ struct ContentView:View {
         if route == .search {
             NativeSearchView(onVideo:{path.append(.video($0))},onCreator:{path.append(.creator($0))})
         } else if route == .messages {
-            MessagesView()
+            MessagesView(refreshID: messageRefreshID)
         } else if route == .following {
             FollowingView()
         } else if route == .dynamic {
