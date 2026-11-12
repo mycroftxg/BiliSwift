@@ -7,7 +7,7 @@
 
 ## 工程与当前交付
 
-- 工作目录：`/Users/mycroft/Documents/Codex/2026-11-08/new-chat-3`
+- 工作目录：本项目的本地检出目录
 - Swift Package 工程：`HarborBili`
 - 最新应用：`HarborBili.app`
 - 版本 **0.3.4，build 10**，Release 构建已完成（2026-11-08 20:4x，含首页滚动/头图自适应修复）。
