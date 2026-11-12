@@ -1,4 +1,4 @@
-# BiliSwift · 原生 macOS 哔哩哔哩客户端
+# BiliSwift · 适用于 macOS 的哔哩哔哩第三方客户端
 
 第三方原生 macOS 哔哩哔哩客户端。SwiftUI + Liquid Glass，尽可能贴近 macOS 原生体验。
 
