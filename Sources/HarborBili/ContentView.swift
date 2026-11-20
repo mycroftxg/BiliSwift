@@ -120,7 +120,8 @@ struct ContentView:View {
             HStack(spacing:0) {
                 PlayerPanel(immersive:true,onBack:{
                     presentation.leavePlayback();playback.player.pause()
-                    if let video=playback.video,path.last?.videoID != video.bvid { path.append(.video(video)) }
+                    // 返回时重建为单层详情，避免导航栈里残留多个 destination 造成界面重叠。
+                    if let video=playback.video { path=[.video(video)] } else { path=[] }
                 },onMinimize:{
                     withAnimation(.snappy(duration:0.28)) {
                         playback.minimized=true
