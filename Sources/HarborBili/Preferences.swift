@@ -61,6 +61,11 @@ struct PreferenceValues:Codable,Equatable {
     init(defaults:UserDefaults = .standard) {
         self.defaults=defaults
         if let data=defaults.data(forKey:"preferences.v1"),let saved=try? JSONDecoder().decode(PreferenceValues.self,from:data) { values=saved }
+        else if let data=Self.legacyContainerData() ,let saved=try? JSONDecoder().decode(PreferenceValues.self,from:data) {
+            // 从沙盒容器迁移到非沙盒后的标准偏好，避免升级后设置丢失。
+            defaults.set(data,forKey:"preferences.v1")
+            values=saved
+        }
         else { values=PreferenceValues() }
     }
     var colorScheme:ColorScheme? { values.appearance=="dark" ? .dark : values.appearance=="light" ? .light:nil }
@@ -78,4 +83,9 @@ struct PreferenceValues:Codable,Equatable {
         values.channelIDs.swapAt(index,target)
     }
     private func save() { if let data=try? JSONEncoder().encode(values) { defaults.set(data,forKey:"preferences.v1") } }
+    private static func legacyContainerData()->Data? {
+        let path=NSHomeDirectory()+"/Library/Containers/app.biliswift.mac/Data/Library/Preferences/app.biliswift.mac.plist"
+        guard let dict=NSDictionary(contentsOfFile:path) else { return nil }
+        return dict["preferences.v1"] as? Data
+    }
 }

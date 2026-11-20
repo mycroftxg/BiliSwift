@@ -135,7 +135,7 @@ struct SettingsView:View {
                 if !updater.status.isEmpty { Text(updater.status).font(.caption).foregroundStyle(.secondary) }
                 if let release=updater.release {
                     if let notes=release.notes,!notes.isEmpty { Text(notes).font(.callout) }
-                    Button(updater.downloading ? "正在下载…":"下载并打开 DMG") { Task { await updater.downloadAndOpen(using:UpdateController.Source(rawValue:prefs.values.updateSource) ?? .auto) } }.disabled(updater.downloading)
+                    Button(updater.downloading ? "正在安装…":"下载并安装更新") { Task { await updater.downloadAndInstall(using:UpdateController.Source(rawValue:prefs.values.updateSource) ?? .auto) } }.disabled(updater.downloading)
                     Link("打开发布页",destination:release.page)
                 }
                 if let error=updater.error { Text(error).font(.caption).foregroundStyle(.red) }

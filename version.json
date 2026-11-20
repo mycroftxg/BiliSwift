@@ -2,7 +2,7 @@
   "version": "0.6.0",
   "build": 205,
   "dmg": "BiliSwift-0.6.0.dmg",
-  "sha256": "5d47e44d32c7ef3c9b2650d4ed23194a55a53dfab48ca733829e6c5383ba74f4",
-  "notes": "后台播放与 Apple Music 风格迷你播放条、macOS 正在播放/媒体键、选集菜单重做、评论点赞回复、性能与动画全面优化。",
+  "sha256": "4870a471c25e7cbf20217f9d1f511ab9808c1cd51b217cad18628c090bb532b6",
+  "notes": "后台播放与 Apple Music 风格迷你播放条、macOS 正在播放/媒体键、选集菜单重做、评论点赞回复、应用内自动更新、性能与动画全面优化。",
   "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.6.0"
 }
