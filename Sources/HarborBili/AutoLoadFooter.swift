@@ -5,6 +5,7 @@ struct AutoLoadFooter:View {
     let hasMore:Bool
     let loading:Bool
     let action:() async -> Void
+    @State private var lastFire=Date.distantPast
 
     var body:some View {
         Group {
@@ -12,9 +13,13 @@ struct AutoLoadFooter:View {
                 ProgressView().controlSize(.small).frame(maxWidth:.infinity).padding(.vertical,12)
             } else if hasMore {
                 Color.clear
-                    .frame(height:1)
+                    .frame(height:2)
                     .frame(maxWidth:.infinity)
-                    .onAppear { Task { await action() } }
+                    .onScrollVisibilityChange(threshold:0.5) { visible in
+                        guard visible,!loading,Date().timeIntervalSince(lastFire)>1.2 else { return }
+                        lastFire=Date()
+                        Task { await action() }
+                    }
             }
         }
     }
