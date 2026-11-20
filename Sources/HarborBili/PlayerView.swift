@@ -577,9 +577,11 @@ struct CommentSidebar:View {
             ScrollView {
                 LazyVStack(alignment:.leading,spacing:18) {
                     ForEach(Array(items.enumerated()),id:\.offset) { _,comment in
-                        PlayerCommentRow(comment:comment,replies:store.replies[comment["rpid"].int] ?? [],loading:store.loadingReplies.contains(comment["rpid"].int)) { root in
+                        PlayerCommentRow(comment:comment,replies:store.replies[comment["rpid"].int] ?? [],loading:store.loadingReplies.contains(comment["rpid"].int),aid:aid,onExpand:{ root in
                             Task { await store.loadReplies(root:root) }
-                        }
+                        },onReplied:{ root in
+                            Task { await store.loadReplies(root:root) }
+                        })
                         .onAppear { if comment["rpid"].int == items.last?["rpid"].int { Task { await store.loadMore() } } }
                     }
                     if store.loading { ProgressView().controlSize(.small).frame(maxWidth:.infinity).padding(.vertical,8) }
@@ -606,22 +608,65 @@ struct PlayerCommentRow:View {
     let comment:JSON
     let replies:[JSON]
     let loading:Bool
+    let aid:Int
     let onExpand:(Int)->Void
+    var onReplied:(Int)->Void = { _ in }
+    @State private var liked:Bool
+    @State private var likeCount:Int
+    @State private var busy=false
+    @State private var showReply=false
+    @State private var draft=""
+    @State private var sending=false
+    @State private var message:String?
+
+    init(comment:JSON,replies:[JSON],loading:Bool,aid:Int,onExpand:@escaping (Int)->Void,onReplied:@escaping (Int)->Void = { _ in }) {
+        self.comment=comment;self.replies=replies;self.loading=loading;self.aid=aid
+        self.onExpand=onExpand;self.onReplied=onReplied
+        _liked=State(initialValue: comment["action"].int == 1)
+        _likeCount=State(initialValue: comment["like"].int)
+    }
     private var rpid:Int { comment["rpid"].int }
     private var rcount:Int { comment["rcount"].int }
+    private var uname:String { comment["member"]["uname"].string.isEmpty ? "用户":comment["member"]["uname"].string }
     var body:some View {
         VStack(alignment:.leading,spacing:9) {
             HStack(alignment:.top,spacing:10) {
                 CoverImage(source:comment["member"]["avatar"].string,width:96,showsPlaceholderIcon:false)
                     .frame(width:34,height:34).clipShape(.circle).clipped()
                 VStack(alignment:.leading,spacing:5) {
-                    Text(comment["member"]["uname"].string.isEmpty ? "用户":comment["member"]["uname"].string)
-                        .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.65))
+                    Text(uname).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.65))
                     Text(comment["content"]["message"].string).font(.callout).foregroundStyle(.white).fixedSize(horizontal:false,vertical:true)
                     HStack(spacing:14) {
-                        if comment["like"].int>0 { Label("\(comment["like"].int)",systemImage:"hand.thumbsup") }
-                        if rcount>0 { Label("\(rcount)",systemImage:"bubble.right") }
-                    }.font(.caption2).foregroundStyle(.white.opacity(0.55))
+                        Button { Task { await toggleLike() } } label:{
+                            Label("\(likeCount)",systemImage:liked ? "hand.thumbsup.fill":"hand.thumbsup")
+                                .foregroundStyle(liked ? Color.pink : Color.white.opacity(0.55))
+                        }
+                        .buttonStyle(.plain).disabled(busy)
+                        .help(liked ? "取消点赞":"点赞")
+                        .accessibilityLabel(liked ? "取消点赞":"点赞")
+
+                        Button { withAnimation(.snappy(duration:0.2)) { showReply.toggle() } } label:{
+                            Label(rcount>0 ? "\(rcount)" : "回复",systemImage:"bubble.right")
+                                .foregroundStyle(showReply ? Color.cyan : Color.white.opacity(0.55))
+                        }
+                        .buttonStyle(.plain)
+                        .help("回复这条评论")
+                        .accessibilityLabel("回复这条评论")
+                    }.font(.caption2)
+                    if let message { Text(message).font(.caption2).foregroundStyle(.white.opacity(0.6)) }
+                    if showReply {
+                        HStack(spacing:8) {
+                            TextField("回复 @\(uname)",text:$draft,axis:.vertical)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...4)
+                                .padding(.horizontal,10).padding(.vertical,7)
+                                .background(.white.opacity(0.08),in:.rect(cornerRadius:8))
+                                .onSubmit { Task { await sendReply() } }
+                            Button(sending ? "发送中…":"发送") { Task { await sendReply() } }
+                                .buttonStyle(.glass).controlSize(.small)
+                                .disabled(sending || draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                        }
+                    }
                 }
             }
             if !replies.isEmpty {
@@ -642,6 +687,41 @@ struct PlayerCommentRow:View {
                     .buttonStyle(.plain).font(.caption.weight(.medium)).foregroundStyle(.cyan).padding(.leading,44)
                     .disabled(loading)
             }
+        }
+    }
+
+    private func toggleLike() async {
+        guard !busy,rpid>0 else { return }
+        busy=true;defer { busy=false }
+        let target = !liked
+        withAnimation(.snappy(duration:0.18)) {
+            liked=target
+            likeCount=max(0,likeCount+(target ? 1 : -1))
+        }
+        do {
+            _=try await BiliAPI.shared.request("/x/v2/comment/action",["oid":"\(aid)","type":"1","rpid":"\(rpid)","action":target ? "1":"0"],post:true)
+            message=nil
+        } catch {
+            withAnimation(.snappy(duration:0.18)) {
+                liked = !target
+                likeCount=max(0,likeCount+(target ? -1 : 1))
+            }
+            if case BiliError.loginRequired = error { message="请先登录后再点赞" }
+            else { message="点赞失败：\(error.localizedDescription)" }
+        }
+    }
+
+    private func sendReply() async {
+        let text=draft.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !sending,!text.isEmpty,rpid>0 else { return }
+        sending=true;defer { sending=false }
+        do {
+            _=try await BiliAPI.shared.request("/x/v2/comment/add",["oid":"\(aid)","type":"1","root":"\(rpid)","parent":"\(rpid)","message":text,"plat":"1"],post:true)
+            draft="";showReply=false;message="已回复"
+            onReplied(rpid)
+        } catch {
+            if case BiliError.loginRequired = error { message="请先登录后再回复" }
+            else { message="回复失败：\(error.localizedDescription)" }
         }
     }
 }
