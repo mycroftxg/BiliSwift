@@ -54,7 +54,7 @@ enum Destination:String,CaseIterable,Identifiable {
     private var dynamicOffset=""
     private var feedFresh=0
     private var generation=UUID()
-    private struct Snapshot { let videos:[Video];let hasMore:Bool;let date:Date }
+    private struct Snapshot { let videos:[Video];let hasMore:Bool;let page:Int;let date:Date }
     private var snapshots:[String:Snapshot]=[:]
     private func cacheKey(_ destination:Destination,keyword:String,channel:BiliChannel?)->String {
         "\(destination.rawValue)|\(keyword)|\(channel?.id ?? "")"
@@ -65,8 +65,8 @@ enum Destination:String,CaseIterable,Identifiable {
         if more { guard !loading,canLoadMore else { return }; ticket=generation }
         else {
             feedFresh &+= 1; ticket=UUID();generation=ticket;videos=[];dynamics=[];page=1;canLoadMore=true;historyMax="0";historyAt="0";dynamicOffset=""
-            if let hit=snapshots[key] {
-                videos=hit.videos;canLoadMore=hit.hasMore
+            if let hit=snapshots[key],!hit.videos.isEmpty {
+                videos=hit.videos;canLoadMore=hit.hasMore;page=hit.page
                 if Date().timeIntervalSince(hit.date)<60 { return }
             }
         }
@@ -151,7 +151,9 @@ enum Destination:String,CaseIterable,Identifiable {
                 || (destination == .dynamic && !dynamicOffset.isEmpty && !result.isEmpty)
             if let reportedMore { canLoadMore=reportedMore }
             if more && fresh.isEmpty { canLoadMore=false }
-            if !more { snapshots[key]=Snapshot(videos:videos,hasMore:canLoadMore,date:Date()) }
+            // 首页首屏已消费 1-3 页，下一页应从 4 开始。
+            if !more,destination == .home,channel == nil { page=3 }
+            if !more,!videos.isEmpty { snapshots[key]=Snapshot(videos:videos,hasMore:canLoadMore,page:page+1,date:Date()) }
             page += 1
         } catch { if generation==ticket { self.error=error.localizedDescription } }
     }
