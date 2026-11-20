@@ -843,6 +843,7 @@ struct EpisodePicker:View {
                                         .frame(width:38,height:24)
                                         .background(current ? AnyShapeStyle(.tint.opacity(0.25)):AnyShapeStyle(.white.opacity(0.08)),in:.rect(cornerRadius:6))
                                     Text(episode.title).font(.callout).lineLimit(2)
+                                        .frame(maxWidth:.infinity,alignment:.leading)
                                         .foregroundStyle(current ? Color.primary:Color.secondary)
                                     Spacer(minLength:4)
                                     if current {
@@ -863,8 +864,9 @@ struct EpisodePicker:View {
                 .onAppear { scroll(proxy) }
                 .onChange(of:currentIndex) { _,_ in scroll(proxy) }
             }
-            .frame(width:340,height:min(360,max(90,CGFloat(episodes.count)*50)))
+            .frame(height:min(340,max(64,CGFloat(episodes.count)*48)))
         }
+        .frame(width:360)
     }
 
     private func scroll(_ proxy:ScrollViewProxy) {
