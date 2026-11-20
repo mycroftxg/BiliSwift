@@ -92,7 +92,7 @@ struct MiniPlayerBar:View {
                     .frame(width:380)
                 }
 
-                Button { withAnimation(.snappy(duration:0.25)) { playback.miniBarHidden=true } } label:{
+                Button { withAnimation(.snappy(duration:0.25)) { playback.stop() } } label:{
                     Image(systemName:"xmark")
                         .font(.system(size:13,weight:.semibold))
                         .frame(width:32,height:32)
@@ -101,7 +101,7 @@ struct MiniPlayerBar:View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.65))
-                .help("关闭播放条（继续后台播放）")
+                .help("停止播放并关闭播放条")
             }
             .foregroundStyle(.white)
             .padding(.horizontal,14).padding(.vertical,10)
