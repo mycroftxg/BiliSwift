@@ -11,6 +11,7 @@ struct DetailView:View {
     @Environment(AppPreferences.self) private var preferences
     @Environment(WindowPresentation.self) private var presentation
     @State private var model=DetailModel()
+    @State private var collectionLimit=30
     @State private var cid=0
     @State private var login=false
     @State private var favorite=false
@@ -38,7 +39,7 @@ struct DetailView:View {
                         Spacer()
                     }
                     ScrollView(.horizontal) {
-                        HStack(spacing:12) {
+                        LazyHStack(spacing:12) {
                             ForEach(model.pages) { episode in
                                 EpisodeCard(episode:episode,playing:episode.cid==cid) { Task { await play(episode) } }
                             }
@@ -52,14 +53,20 @@ struct DetailView:View {
                         Spacer()
                     }
                     ScrollView(.horizontal) {
-                        HStack(spacing:12) {
-                            ForEach(model.collectionEpisodes) { episode in
+                        LazyHStack(spacing:12) {
+                            ForEach(Array(model.collectionEpisodes.prefix(collectionLimit))) { episode in
                                 Button { Task { await playCollection(episode) } } label:{
                                     VStack(alignment:.leading,spacing:6) {
                                         Thumbnail(source:episode.cover).frame(width:190,height:107).clipShape(.rect(cornerRadius:10))
                                         Text(episode.title).font(.system(size:12,weight:.medium)).lineLimit(1).frame(width:190,alignment:.leading)
                                     }
                                 }.buttonStyle(.plain)
+                                .onAppear {
+                                    if episode.id == model.collectionEpisodes.prefix(collectionLimit).last?.id,
+                                       collectionLimit < model.collectionEpisodes.count {
+                                        collectionLimit=min(collectionLimit+24,model.collectionEpisodes.count)
+                                    }
+                                }
                             }
                         }.padding(.vertical,2)
                     }.scrollIndicators(.hidden).shelfBleed(36)
