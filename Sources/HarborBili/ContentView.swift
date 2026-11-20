@@ -22,6 +22,7 @@ struct ContentView:View {
     @State private var messageRefreshID = UUID()
     @State private var nearBottom=false
     @State private var viewport=CGSize(width:1000,height:800)
+    @State private var sidebarWidth:CGFloat=220
     private var route:Destination { Destination(rawValue:selection) ?? .channels }
     private var channel:BiliChannel? { selection.hasPrefix("channel.") ? BiliChannel.find(String(selection.dropFirst(8))):nil }
     private var nativeCatalog:Bool { route == .home || route == .live || channel != nil }
@@ -48,6 +49,7 @@ struct ContentView:View {
                     Button { openURL(URL(string:"https://account.bilibili.com/big")!) } label:{ Label("大会员 ↗",systemImage:"crown") }
                 }
             }.listStyle(.sidebar).navigationSplitViewColumnWidth(min:190,ideal:220,max:280)
+                .onGeometryChange(for:CGFloat.self) { $0.size.width } action:{ sidebarWidth=$0 }
                 .safeAreaInset(edge:.bottom) {
                     HStack(spacing:10) {
                         Button { if account.loggedIn { selection=Destination.space.rawValue } else { login=true } } label:{
@@ -96,21 +98,24 @@ struct ContentView:View {
                         ToolbarItem { if !presentation.immersive,!account.loggedIn { Button("登录") { login=true } } }
                     }
             }
-            .safeAreaInset(edge:.bottom,spacing:0) {
+        }.toolbar(removing:.sidebarToggle)
+            .opacity(presentation.immersive ? 0:1)
+            .allowsHitTesting(!presentation.immersive).accessibilityHidden(presentation.immersive)
+            .overlay(alignment:.bottom) {
                 if playback.video != nil,!presentation.immersive {
-                    MiniPlayerBar()
-                        .frame(maxWidth:680)
-                        .padding(.horizontal,16).padding(.bottom,10)
-                        .contentShape(.rect)
-                        .zIndex(20)
-                        .transition(.move(edge:.bottom).combined(with:.opacity))
+                    HStack(spacing:0) {
+                        Spacer().frame(width:sidebarWidth)
+                        Spacer(minLength:0)
+                        MiniPlayerBar().frame(maxWidth:680)
+                        Spacer(minLength:0)
+                    }
+                    .padding(.horizontal,16).padding(.bottom,12)
+                    .transition(.move(edge:.bottom).combined(with:.opacity))
+                    .zIndex(30)
                 }
             }
             .animation(.snappy(duration:0.3),value:playback.minimized)
             .animation(.snappy(duration:0.3),value:presentation.immersive)
-        }.toolbar(removing:.sidebarToggle)
-            .opacity(presentation.immersive ? 0:1)
-            .allowsHitTesting(!presentation.immersive).accessibilityHidden(presentation.immersive)
         if presentation.immersive {
             HStack(spacing:0) {
                 PlayerPanel(immersive:true,onBack:{
