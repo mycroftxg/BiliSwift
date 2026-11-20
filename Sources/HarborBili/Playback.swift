@@ -26,6 +26,7 @@ import HarborCore
                 }
             }
         }
+        NowPlayingCenter.shared.attach(self)
     }
     /// 从头播放。
     func replay() {
@@ -98,6 +99,7 @@ import HarborCore
     func open(video:Video,cid:Int,library:LocalLibrary,episodes:[Episode]=[]) async {
         stop();self.episodes=episodes;self.video=video;self.cid=cid;self.library=library;libraryRef=library;error=nil;notice=nil;outputStatus="正在准备";showNextPreview=false;nextCountdown=nil
         fallbackAttempted=false;refreshAttempted=false;generation=UUID();let ticket=generation
+        NowPlayingCenter.shared.update(from:self,force:true)
         loading=true;ended=false
         if let values=preferences?.values {
             volume=values.volume;rate=Float(values.rate);showDanmaku=values.danmaku;danmakuOpacity=values.danmakuOpacity
@@ -325,6 +327,7 @@ import HarborCore
                     self.nextCountdown = (remaining>0.2 && remaining<=5) ? max(1,Int(ceil(remaining))) : nil
                 }
                 self.playing=self.player.timeControlStatus == .playing
+                NowPlayingCenter.shared.update(from:self)
                 self.loading=self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate || item.status == .unknown
                 if item.status == .readyToPlay {
                     unreadyTicks=0
@@ -381,17 +384,19 @@ import HarborCore
         }
         player.pause();loading=false;playing=false;outputStatus="播放失败";error="播放失败：\(failure.localizedDescription)"
     }
-    func toggle() { if player.rate>0 { player.pause() } else { player.playImmediately(atRate:rate) } }
+    func toggle() { if player.rate>0 { player.pause() } else { player.playImmediately(atRate:rate) };NowPlayingCenter.shared.update(from:self,force:true) }
+    func resumeFromRemote() { player.playImmediately(atRate:rate);playing=true;NowPlayingCenter.shared.update(from:self,force:true) }
     /// 离开播放界面时立即停声，避免窗口已切走但视频还在后台解码发热。
     func pause() {
         guard player.rate>0 || playing else { return }
-        player.pause();playing=false
+        player.pause();playing=false;NowPlayingCenter.shared.update(from:self,force:true)
     }
     func seek(_ value:Double) {
         guard video?.roomID==nil,value.isFinite else { return }
         seconds=max(0,min(value,duration))
         if showNextPreview { withAnimation(.snappy(duration:0.2)) { showNextPreview=false } }
         player.seek(to:CMTime(seconds:seconds,preferredTimescale:600))
+        NowPlayingCenter.shared.update(from:self,force:true)
     }
     func setRate(_ value:Float) { rate=value;if player.rate>0 { player.rate=value } }
     func setVolume(_ value:Double) { volume=value;player.volume=Float(value) }
@@ -415,6 +420,7 @@ import HarborCore
         seconds=0;duration=0;playing=false;loading=false;ended=false;manifest=nil;selectedVideo=nil;selectedAudio=nil
         cancelAutoNext();showNextPreview=false;liveQualities=[];liveQuality=0;liveRoomID=nil;stopLiveChat()
         danmaku=[];subtitles=[];subtitleChoices=[];subtitleID="";episodes=[];episodesLoading=false;videoComments=[];commentsAid=0;commentsOpen=false;videoTint=nil
+        NowPlayingCenter.shared.clear()
     }
     func shutdown() async { stop();await gateway.stop() }
     private func loadTimedText(bvid:String,cid:Int,ticket:UUID) async {
