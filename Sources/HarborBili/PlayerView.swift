@@ -274,18 +274,18 @@ struct PlayerPanel:View {
     private var backButton:some View {
         roundButton(immersive ? "返回视频详情":"停止播放并返回详情",symbol:"chevron.left",size:36,action:onBack)
     }
-    private enum ControlMetrics { static let height:CGFloat=30;static let icon:CGFloat=13;static let font:CGFloat=12 }
+    private enum ControlMetrics { static let height:CGFloat=32;static let width:CGFloat=60;static let icon:CGFloat=13;static let font:CGFloat=12 }
     private func iconButton(_ symbol:String,label:String,action:@escaping()->Void)->some View {
         Button { reveal();action() } label:{
             Image(systemName:symbol).font(.system(size:ControlMetrics.icon,weight:.semibold))
-                .frame(width:36,height:ControlMetrics.height)
+                .frame(width:ControlMetrics.width,height:ControlMetrics.height)
         }.buttonStyle(.glass).buttonBorderShape(.capsule).help(label).accessibilityLabel(label)
     }
     private var fullScreenButton:some View {
         Button {
             reveal();if !immersive {presentation.immersive=true};presentation.toggleFullScreen()
         } label:{ Image(systemName:presentation.fullScreen ? "arrow.down.right.and.arrow.up.left":"arrow.up.left.and.arrow.down.right")
-            .font(.system(size:ControlMetrics.icon,weight:.semibold)).frame(width:36,height:ControlMetrics.height) }
+            .font(.system(size:ControlMetrics.icon,weight:.semibold)).frame(width:ControlMetrics.width,height:ControlMetrics.height) }
             .buttonStyle(.glass).buttonBorderShape(.capsule)
             .help(presentation.fullScreen ? "退出全屏":"全屏播放").accessibilityLabel(presentation.fullScreen ? "退出全屏":"全屏播放")
     }
@@ -310,10 +310,9 @@ struct PlayerPanel:View {
                 if dolbyOnly { DolbyGlyph().frame(width:20,height:12) }
                 else if panel == .episodes,fetchingEpisodes { ProgressView().controlSize(.mini) }
                 else if let symbol { Image(systemName:symbol).font(.system(size:ControlMetrics.icon,weight:.semibold)) }
-                else { Text(title).font(.system(size:ControlMetrics.font,weight:.semibold)).fixedSize(horizontal:true,vertical:false) }
+                else { Text(title).font(.system(size:ControlMetrics.font,weight:.semibold)).lineLimit(1).minimumScaleFactor(0.72) }
             }
-            .frame(minWidth:36,minHeight:ControlMetrics.height)
-            .padding(.horizontal,symbol == nil ? 8:0)
+            .frame(width:ControlMetrics.width,height:ControlMetrics.height)
             .layoutPriority(symbol == nil ? 1:0)
         }.buttonStyle(.glass).buttonBorderShape(.capsule).help(title).accessibilityLabel(title)
             .popover(isPresented:Binding(get:{popover==panel},set:{if !$0 {popover=nil;reveal()}})) {
