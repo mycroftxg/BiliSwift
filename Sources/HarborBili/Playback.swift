@@ -43,6 +43,7 @@ import HarborCore
     var commentsAid=0
     var commentsOpen=false
     var showNextPreview=false
+    var minimized=false
     var nextCountdown:Int?
     @ObservationIgnored private var autoNextTask:Task<Void,Never>?
     @ObservationIgnored private var libraryRef:LocalLibrary?
@@ -97,7 +98,7 @@ import HarborCore
     var audioChoices:[MediaTrack] { (manifest?.audio ?? []).sorted { $0.bandwidth > $1.bandwidth } }
     var subtitle:String { subtitles.first { $0.from <= seconds && seconds < $0.to }?.text ?? "" }
     func open(video:Video,cid:Int,library:LocalLibrary,episodes:[Episode]=[]) async {
-        stop();self.episodes=episodes;self.video=video;self.cid=cid;self.library=library;libraryRef=library;error=nil;notice=nil;outputStatus="正在准备";showNextPreview=false;nextCountdown=nil
+        stop();minimized=false;self.episodes=episodes;self.video=video;self.cid=cid;self.library=library;libraryRef=library;error=nil;notice=nil;outputStatus="正在准备";showNextPreview=false;nextCountdown=nil
         fallbackAttempted=false;refreshAttempted=false;generation=UUID();let ticket=generation
         NowPlayingCenter.shared.update(from:self,force:true)
         loading=true;ended=false
@@ -408,6 +409,12 @@ import HarborCore
     func cancelAutoNext() {
         autoNextTask?.cancel();autoNextTask=nil;nextCountdown=nil
     }
+    func playPreviousEpisode() async {
+        guard let video else { return }
+        guard let index=currentEpisodeIndex,index>0,let library=libraryRef else { seek(0);return }
+        let episode=episodes[index-1]
+        await open(video:episode.video ?? video,cid:episode.cid,library:library,episodes:episodes)
+    }
     func playNextEpisode() async {
         guard let next=nextEpisode,let library=libraryRef else { return }
         cancelAutoNext();withAnimation(.snappy(duration:0.25)) { showNextPreview=false };ended=false
@@ -418,7 +425,7 @@ import HarborCore
     func stop() {
         persist();generation=UUID();monitor?.cancel();monitor=nil;player.pause();player.replaceCurrentItem(with:nil)
         seconds=0;duration=0;playing=false;loading=false;ended=false;manifest=nil;selectedVideo=nil;selectedAudio=nil
-        cancelAutoNext();showNextPreview=false;liveQualities=[];liveQuality=0;liveRoomID=nil;stopLiveChat()
+        cancelAutoNext();showNextPreview=false;minimized=false;liveQualities=[];liveQuality=0;liveRoomID=nil;stopLiveChat()
         danmaku=[];subtitles=[];subtitleChoices=[];subtitleID="";episodes=[];episodesLoading=false;videoComments=[];commentsAid=0;commentsOpen=false;videoTint=nil
         NowPlayingCenter.shared.clear()
     }

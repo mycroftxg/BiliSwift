@@ -96,8 +96,16 @@ struct ContentView:View {
                         ToolbarItem { if !presentation.immersive,!account.loggedIn { Button("登录") { login=true } } }
                     }
             }
+            .overlay(alignment:.bottom) {
+                if playback.video != nil,!presentation.immersive {
+                    MiniPlayerBar()
+                        .padding(.horizontal,16).padding(.bottom,12)
+                        .transition(.move(edge:.bottom).combined(with:.opacity))
+                }
+            }
+            .animation(.snappy(duration:0.3),value:playback.minimized)
+            .animation(.snappy(duration:0.3),value:presentation.immersive)
         }.toolbar(removing:.sidebarToggle)
-            .onChange(of:presentation.immersive) { _,value in if !value { playback.pause() } }
             .opacity(presentation.immersive ? 0:1)
             .allowsHitTesting(!presentation.immersive).accessibilityHidden(presentation.immersive)
         if presentation.immersive {
@@ -105,6 +113,11 @@ struct ContentView:View {
                 PlayerPanel(immersive:true,onBack:{
                     presentation.leavePlayback();playback.player.pause()
                     if let video=playback.video,path.last?.videoID != video.bvid { path.append(.video(video)) }
+                },onMinimize:{
+                    withAnimation(.snappy(duration:0.28)) {
+                        playback.minimized=true
+                        presentation.leavePlayback()
+                    }
                 })
                 if playback.commentsOpen,playback.video?.roomID == nil {
                     CommentSidebar(aid:playback.commentsAid,bvid:playback.video?.bvid ?? "",tint:playback.videoTint,comments:playback.videoComments,onClose:{ withAnimation(.snappy(duration:0.3)) { playback.commentsOpen=false } })
@@ -150,7 +163,7 @@ struct ContentView:View {
     private func row(_ destination:Destination)->some View {
         Label(destination.rawValue,systemImage:destination.symbol).tag(destination.rawValue)
             .simultaneousGesture(TapGesture(count:2).onEnded {
-                if destination == .home { presentation.leavePlayback();playback.pause();selection=Destination.home.rawValue;path=[];homeJump=UUID() }
+                if destination == .home { presentation.leavePlayback();selection=Destination.home.rawValue;path=[];homeJump=UUID() }
             })
     }
     @ViewBuilder private var catalogContent:some View {

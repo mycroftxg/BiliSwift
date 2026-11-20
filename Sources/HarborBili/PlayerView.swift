@@ -8,9 +8,9 @@ struct PlayerPanel:View {
     @Environment(AppPreferences.self) private var preferences
     @Environment(WindowPresentation.self) private var presentation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
     var immersive=false
     var onBack:()->Void = {}
+    var onMinimize:()->Void = {}
     @State private var scrubbing=false
     @State private var scrub:Double=0
     @State private var controlsVisible=true
@@ -118,8 +118,6 @@ struct PlayerPanel:View {
                 .onKeyPress(.rightArrow) { controller.seek(controller.seconds+10);reveal();return .handled }
                 .onExitCommand { if presentation.fullScreen { presentation.exitFullScreen() } else { onBack() } }
         }
-        .onDisappear { controller.pause() }
-        .onChange(of:scenePhase) { _,phase in if phase == .background { controller.pause() } }
         .modifier(PlayerSizing(immersive:immersive))
             .task {
                 if immersive { focused=true }
@@ -144,6 +142,9 @@ struct PlayerPanel:View {
             VStack(spacing:0) {
                 HStack(alignment:.center,spacing:12) {
                     backButton
+                    if immersive {
+                        roundButton("收起播放器，继续播放",symbol:"chevron.down",size:36,action:onMinimize)
+                    }
                     Spacer()
                     if controller.video?.roomID == nil {
                         Button {
