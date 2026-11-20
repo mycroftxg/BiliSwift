@@ -93,7 +93,8 @@ enum Destination:String,CaseIterable,Identifiable {
                     // 首屏三页并发请求，避免串行等待 3 次往返。
                     async let first=BiliAPI.shared.homeFeed(page:1,fresh:feedFresh)
                     async let second=BiliAPI.shared.homeFeed(page:2,fresh:feedFresh)
-                    let batches=try await [first,second]
+                    async let third=BiliAPI.shared.homeFeed(page:3,fresh:feedFresh)
+                    let batches=try await [first,second,third]
                     for batch in batches {
                         for video in batch where !video.bvid.isEmpty && !seen.contains(video.id) {
                             seen.insert(video.id);result.append(video)
@@ -151,7 +152,7 @@ enum Destination:String,CaseIterable,Identifiable {
             if let reportedMore { canLoadMore=reportedMore }
             if more && fresh.isEmpty { canLoadMore=false }
             // 首页首屏已消费 1-3 页，下一页应从 4 开始。
-            if !more,destination == .home,channel == nil { page=2 }
+            if !more,destination == .home,channel == nil { page=3 }
             if !more,!videos.isEmpty { snapshots[key]=Snapshot(videos:videos,hasMore:canLoadMore,page:page+1,date:Date()) }
             page += 1
         } catch { if generation==ticket { self.error=error.localizedDescription } }

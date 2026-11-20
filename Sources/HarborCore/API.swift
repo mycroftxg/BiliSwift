@@ -102,12 +102,13 @@ public actor BiliAPI {
             // 刷新时轮换起始页（共 8 个窗口，每次前进 3 页），保证内容真的会变。
             let window=((max(fresh,1)-1)%8)*3
             let first=window+(max(page,1)-1)*3+1
-            let pageA=first,pageB=first+1
+            let pageA=first,pageB=first+1,pageC=first+2
             async let requestA=request("/pgc/season/index/result",["season_type":"\(type)","type":"1","st":"\(type)","page":"\(pageA)","pagesize":"24","order":"3","sort":"0"])
             async let requestB=request("/pgc/season/index/result",["season_type":"\(type)","type":"1","st":"\(type)","page":"\(pageB)","pagesize":"24","order":"3","sort":"0"])
-            let (dataA,dataB)=try await (requestA,requestB)
-            var items:[JSON]=dataA["list"].array+dataB["list"].array
-            let hasNext=dataB["has_next"].int==1
+            async let requestC=request("/pgc/season/index/result",["season_type":"\(type)","type":"1","st":"\(type)","page":"\(pageC)","pagesize":"24","order":"3","sort":"0"])
+            let (dataA,dataB,dataC)=try await (requestA,requestB,requestC)
+            var items:[JSON]=dataA["list"].array+dataB["list"].array+dataC["list"].array
+            let hasNext=dataC["has_next"].int==1
             var seen=Set<Int>()
             var unique:[JSON]=[]
             for item in items {
