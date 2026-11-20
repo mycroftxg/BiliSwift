@@ -354,10 +354,11 @@ struct PlayerPanel:View {
                 if controller.subtitleChoices.isEmpty { Text("此片源暂无可用字幕").font(.caption).foregroundStyle(.secondary) }
             }
         case .episodes:
-            VStack(alignment:.leading,spacing:12) {
-                Text("选集").font(.headline)
-                ScrollView { VStack(alignment:.leading,spacing:12) { ForEach(controller.episodes) { episode in choice("P\(episode.page)  \(episode.title)",selected:episode.cid==controller.cid) { playEpisode(episode);popover=nil } } } }.frame(height:min(380,max(70,CGFloat(controller.episodes.count)*40)))
-                if let episodeFailure { Text(episodeFailure).font(.caption).foregroundStyle(.secondary) }
+            VStack(alignment:.leading,spacing:8) {
+                EpisodePicker(episodes:controller.episodes,currentIndex:controller.currentEpisodeIndex) { episode in
+                    playEpisode(episode);popover=nil
+                }
+                if let episodeFailure { Text(episodeFailure).font(.caption).foregroundStyle(.secondary).padding(.horizontal,14).padding(.bottom,10) }
             }
         case .danmaku:
             VStack(alignment:.leading,spacing:14) {
@@ -807,6 +808,71 @@ struct PlayerReplyRow:View {
         } catch {
             if case BiliError.loginRequired = error { message="请先登录后再回复" }
             else { message="回复失败：\(error.localizedDescription)" }
+        }
+    }
+}
+
+/// 播放器/播放条共用的选集列表：自动滚到当前集，并高亮"正在播放"。
+struct EpisodePicker:View {
+    let episodes:[Episode]
+    let currentIndex:Int?
+    let onSelect:(Episode)->Void
+
+    var body:some View {
+        VStack(spacing:0) {
+            HStack(spacing:8) {
+                Text("选集").font(.headline)
+                Text("\(episodes.count) 集").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if let currentIndex,episodes.indices.contains(currentIndex) {
+                    Text("正在播放 P\(episodes[currentIndex].page)")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.tint)
+                }
+            }.padding(.horizontal,14).padding(.vertical,12)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing:2) {
+                        ForEach(Array(episodes.enumerated()),id:\.offset) { index,episode in
+                            let current = index == currentIndex
+                            Button { onSelect(episode) } label:{
+                                HStack(spacing:10) {
+                                    Text("P\(episode.page)")
+                                        .font(.caption2.weight(.bold))
+                                        .frame(width:38,height:24)
+                                        .background(current ? AnyShapeStyle(.tint.opacity(0.25)):AnyShapeStyle(.white.opacity(0.08)),in:.rect(cornerRadius:6))
+                                    Text(episode.title).font(.callout).lineLimit(2)
+                                        .foregroundStyle(current ? Color.primary:Color.secondary)
+                                    Spacer(minLength:4)
+                                    if current {
+                                        Image(systemName:"waveform").font(.caption).foregroundStyle(.tint)
+                                        Text("正在播放").font(.caption2.weight(.semibold)).foregroundStyle(.tint)
+                                    } else {
+                                        Image(systemName:"play.fill").font(.caption2).foregroundStyle(.tertiary)
+                                    }
+                                }
+                                .padding(.horizontal,8).padding(.vertical,7)
+                                .background(current ? AnyShapeStyle(.tint.opacity(0.14)):AnyShapeStyle(.clear),in:.rect(cornerRadius:8))
+                                .contentShape(.rect)
+                            }.buttonStyle(.plain)
+                            .id(index)
+                        }
+                    }.padding(8)
+                }
+                .onAppear { scroll(proxy) }
+                .onChange(of:currentIndex) { _,_ in scroll(proxy) }
+            }
+            .frame(width:340,height:min(360,max(90,CGFloat(episodes.count)*50)))
+        }
+    }
+
+    private func scroll(_ proxy:ScrollViewProxy) {
+        guard let currentIndex,episodes.indices.contains(currentIndex) else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration:0.32)) {
+                proxy.scrollTo(currentIndex,anchor:.center)
+            }
         }
     }
 }

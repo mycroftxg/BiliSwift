@@ -85,29 +85,10 @@ struct MiniPlayerBar:View {
                 .disabled(playback.episodes.isEmpty)
                 .help(playback.episodes.isEmpty ? "暂无选集":"选集")
                 .popover(isPresented:$showEpisodes,arrowEdge:.bottom) {
-                    VStack(alignment:.leading,spacing:0) {
-                        HStack { Text("选集").font(.headline);Spacer();Text("\(playback.episodes.count) 集").font(.caption).foregroundStyle(.secondary) }.padding(14)
-                        Divider()
-                        ScrollView {
-                            LazyVStack(spacing:0) {
-                                ForEach(Array(playback.episodes.enumerated()),id:\.offset) { index,episode in
-                                    Button {
-                                        showEpisodes=false
-                                        Task { await playback.playEpisode(episode) }
-                                    } label:{
-                                        HStack(spacing:10) {
-                                            Text("第 \(index+1) 集").font(.caption).foregroundStyle(.secondary).frame(width:54,alignment:.leading)
-                                            Text(episode.title).font(.callout).lineLimit(1)
-                                            Spacer()
-                                            if playback.currentEpisodeIndex==index { Image(systemName:"checkmark").foregroundStyle(.tint) }
-                                        }
-                                        .padding(.horizontal,14).padding(.vertical,8)
-                                        .contentShape(.rect)
-                                    }.buttonStyle(.plain)
-                                }
-                            }
-                        }.frame(maxHeight:300)
-                    }.frame(width:300)
+                    EpisodePicker(episodes:playback.episodes,currentIndex:playback.currentEpisodeIndex) { episode in
+                        showEpisodes=false
+                        Task { await playback.playEpisode(episode) }
+                    }
                 }
 
                 Button { withAnimation(.snappy(duration:0.25)) { playback.miniBarHidden=true } } label:{
