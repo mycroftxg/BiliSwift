@@ -13,16 +13,21 @@ struct MiniPlayerBar:View {
             HStack(spacing:14) {
                 Button(action:restore) {
                     CoverImage(source:video.cover,width:320,showsPlaceholderIcon:false)
+                        .id(video.cover)
+                        .transition(.opacity)
                         .frame(width:72,height:41)
                         .clipShape(.rect(cornerRadius:7))
                         .overlay { RoundedRectangle(cornerRadius:7).strokeBorder(.white.opacity(0.12),lineWidth:1) }
                 }.buttonStyle(.plain).help("展开播放器")
+                    .animation(.easeInOut(duration:0.25),value:video.cover)
 
                 VStack(alignment:.leading,spacing:4) {
                     HStack(spacing:8) {
                         Button(action:restore) {
                             Text(video.title).font(.system(size:13,weight:.semibold)).lineLimit(1)
                                 .foregroundStyle(.white)
+                                .contentTransition(.opacity)
+                                .animation(.easeInOut(duration:0.22),value:video.title)
                         }.buttonStyle(.plain).help(video.title)
                         if video.roomID != nil {
                             Text("直播").font(.system(size:9,weight:.bold)).foregroundStyle(.white)
@@ -31,16 +36,22 @@ struct MiniPlayerBar:View {
                         }
                         Spacer(minLength:8)
                         if video.roomID == nil {
-                            Text(time(scrub ?? playback.seconds)).font(.system(size:10)).monospacedDigit().foregroundStyle(.white.opacity(0.55))
+                            Text(time(scrub ?? playback.seconds)).font(.system(size:10)).monospacedDigit()
+                                .foregroundStyle(.white.opacity(0.55))
+                                .contentTransition(.numericText())
+                                .animation(.snappy(duration:0.25),value:time(scrub ?? playback.seconds))
                         }
                     }
                     Text(subtitle(video)).font(.system(size:11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                        .contentTransition(.opacity)
+                        .animation(.easeInOut(duration:0.22),value:subtitle(video))
                     if video.roomID == nil {
                         Slider(value:Binding(get:{scrub ?? playback.seconds},set:{scrub=$0}),in:0...max(1,playback.duration),onEditingChanged:{ editing in
                             if editing { scrub=playback.seconds }
                             else { if let value=scrub { playback.seek(value) };scrub=nil }
                         })
                         .controlSize(.mini).tint(.white)
+                        .animation(scrub == nil ? .linear(duration:0.3) : nil,value:playback.seconds)
                         .accessibilityLabel("播放进度")
                     } else {
                         Capsule().fill(.white.opacity(0.15)).frame(height:3)
@@ -58,6 +69,7 @@ struct MiniPlayerBar:View {
                             .font(.system(size:19))
                             .frame(width:30,height:30)
                             .contentTransition(.symbolEffect(.replace))
+                            .animation(.snappy(duration:0.2),value:playback.playing)
                     }.buttonStyle(.plain).help(playback.playing ? "暂停":"播放")
 
                     Button { Task { await playback.playNextEpisode() } } label:{
@@ -68,6 +80,8 @@ struct MiniPlayerBar:View {
                 HStack(spacing:6) {
                     Image(systemName:playback.volume==0 ? "speaker.slash.fill":"speaker.wave.2.fill")
                         .font(.system(size:11)).foregroundStyle(.white.opacity(0.65))
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(.snappy(duration:0.2),value:playback.volume==0)
                     Slider(value:Binding(get:{playback.volume},set:{playback.setVolume($0)}),in:0...1)
                         .frame(width:64).controlSize(.mini).tint(.white)
                         .accessibilityLabel("音量")
