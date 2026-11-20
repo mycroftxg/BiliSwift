@@ -80,6 +80,9 @@ struct SettingsView:View {
                 Picker("默认倍速",selection:$prefs.values.rate) { ForEach([0.5,0.75,1,1.25,1.5,2],id:\.self) { Text("\($0.formatted())×").tag($0) } }
                 LabeledContent("默认音量") { Slider(value:$prefs.values.volume,in:0...1).frame(width:180);Text(prefs.values.volume,format:.percent.precision(.fractionLength(0))).monospacedDigit().frame(width:42) }
                 Toggle("打开详情时自动播放",isOn:$prefs.values.autoPlay)
+                Toggle("退出播放器后继续播放",isOn:$prefs.values.backgroundPlayback)
+                Text("开启后，播放器左上角为向下箭头：收起播放器继续播放音频；关闭后为返回箭头：退出即暂停，但底部播放条仍保留。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("从上次进度继续播放",isOn:$prefs.values.resume)
             }
             Section("控制栏") {

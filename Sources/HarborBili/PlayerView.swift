@@ -141,9 +141,10 @@ struct PlayerPanel:View {
             VStack { LinearGradient(colors:[.black.opacity(0.3),.clear],startPoint:.top,endPoint:.bottom).frame(height:100);Spacer();LinearGradient(colors:[.clear,.black.opacity(0.72),.black.opacity(0.85)],startPoint:.top,endPoint:.bottom).frame(height:210) }.allowsHitTesting(false)
             VStack(spacing:0) {
                 HStack(alignment:.center,spacing:12) {
-                    backButton
-                    if immersive {
+                    if immersive,preferences.values.backgroundPlayback {
                         roundButton("收起播放器，继续播放",symbol:"chevron.down",size:36,action:onMinimize)
+                    } else {
+                        backButton
                     }
                     Spacer()
                     if controller.video?.roomID == nil {

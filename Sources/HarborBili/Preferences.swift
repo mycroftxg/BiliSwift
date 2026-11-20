@@ -10,6 +10,7 @@ struct PreferenceValues:Codable,Equatable {
     var rate=1.0
     var resume=true
     var autoPlay=false
+    var backgroundPlayback=true
     var autoHide=true
     var lowPowerMode=false
     var updateSource="auto"
@@ -25,7 +26,7 @@ struct PreferenceValues:Codable,Equatable {
     var channelIDs=BiliChannel.defaultIDs
     var tmdbToken=""
     init() {}
-    enum CodingKeys:String,CodingKey {case appearance,quality,preferredFormat,codec,volume,rate,resume,autoPlay,autoHide,lowPowerMode,hideDelay,updateSource,danmaku,danmakuOpacity,danmakuSize,danmakuSpeed,danmakuDensity,subtitleSize,syncHistory,saveHistory,channelIDs,tmdbToken}
+    enum CodingKeys:String,CodingKey {case appearance,quality,preferredFormat,codec,volume,rate,resume,autoPlay,backgroundPlayback,autoHide,lowPowerMode,hideDelay,updateSource,danmaku,danmakuOpacity,danmakuSize,danmakuSpeed,danmakuDensity,subtitleSize,syncHistory,saveHistory,channelIDs,tmdbToken}
     init(from decoder:Decoder) throws {
         let c=try decoder.container(keyedBy:CodingKeys.self)
         appearance=try c.decodeIfPresent(String.self,forKey:.appearance) ?? "system"
@@ -36,6 +37,7 @@ struct PreferenceValues:Codable,Equatable {
         rate=try c.decodeIfPresent(Double.self,forKey:.rate) ?? 1.0
         resume=try c.decodeIfPresent(Bool.self,forKey:.resume) ?? true
         autoPlay=try c.decodeIfPresent(Bool.self,forKey:.autoPlay) ?? false
+        backgroundPlayback=try c.decodeIfPresent(Bool.self,forKey:.backgroundPlayback) ?? true
         autoHide=try c.decodeIfPresent(Bool.self,forKey:.autoHide) ?? true
         lowPowerMode=try c.decodeIfPresent(Bool.self,forKey:.lowPowerMode) ?? false
         updateSource=try c.decodeIfPresent(String.self,forKey:.updateSource) ?? "auto"
