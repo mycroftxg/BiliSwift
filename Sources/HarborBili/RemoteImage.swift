@@ -128,8 +128,10 @@ struct RemoteImage:View {
             }
         }.clipped()
         .task(id:source) {
-            guard image==nil, !source.isEmpty else { return }
-            image=await RemoteImageStore.shared.image(source,width:width,height:square ? width:nil)
+            guard !source.isEmpty else { image=nil;return }
+            let loaded=await RemoteImageStore.shared.image(source,width:width,height:square ? width:nil)
+            guard !Task.isCancelled else { return }
+            image=loaded
         }
     }
 }
