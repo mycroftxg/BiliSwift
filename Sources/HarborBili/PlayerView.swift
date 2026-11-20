@@ -699,7 +699,7 @@ struct PlayerCommentRow:View {
             likeCount=max(0,likeCount+(target ? 1 : -1))
         }
         do {
-            _=try await BiliAPI.shared.request("/x/v2/comment/action",["oid":"\(aid)","type":"1","rpid":"\(rpid)","action":target ? "1":"0"],post:true)
+            _=try await BiliAPI.shared.request("/x/v2/reply/action",["oid":"\(aid)","type":"1","rpid":"\(rpid)","action":target ? "1":"0"],post:true)
             message=nil
         } catch {
             withAnimation(.snappy(duration:0.18)) {
@@ -716,7 +716,7 @@ struct PlayerCommentRow:View {
         guard !sending,!text.isEmpty,rpid>0 else { return }
         sending=true;defer { sending=false }
         do {
-            _=try await BiliAPI.shared.request("/x/v2/comment/add",["oid":"\(aid)","type":"1","root":"\(rpid)","parent":"\(rpid)","message":text,"plat":"1"],post:true)
+            _=try await BiliAPI.shared.request("/x/v2/reply/add",["oid":"\(aid)","type":"1","root":"\(rpid)","parent":"\(rpid)","message":text,"plat":"1"],post:true)
             draft="";showReply=false;message="已回复"
             onReplied(rpid)
         } catch {
