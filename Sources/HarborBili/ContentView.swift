@@ -110,16 +110,20 @@ struct ContentView:View {
                         Spacer(minLength:0)
                     }
                     .padding(.horizontal,16).padding(.bottom,12)
-                    .transition(.move(edge:.bottom).combined(with:.opacity))
+                    .transition(.asymmetric(
+                        insertion:.move(edge:.bottom).combined(with:.opacity).combined(with:.scale(scale:0.96,anchor:.bottom)),
+                        removal:.move(edge:.bottom).combined(with:.opacity)
+                    ))
                     .zIndex(30)
                 }
             }
-            .animation(.snappy(duration:0.3),value:playback.minimized)
-            .animation(.snappy(duration:0.3),value:presentation.immersive)
+            .animation(.spring(response:0.5,dampingFraction:0.88),value:playback.minimized)
+            .animation(.easeInOut(duration:0.3),value:presentation.immersive)
         if presentation.immersive {
             HStack(spacing:0) {
                 PlayerPanel(immersive:true,onBack:{
-                    presentation.leavePlayback();playback.player.pause()
+                    withAnimation(.easeInOut(duration:0.28)) { presentation.leavePlayback() }
+                    playback.player.pause()
                     // 先清空导航栈、下一帧再压入单层详情，避免旧 destination 与新详情同帧过渡造成重叠。
                     var transaction=Transaction();transaction.disablesAnimations=true
                     if let video=playback.video {
@@ -132,7 +136,7 @@ struct ContentView:View {
                         withTransaction(transaction) { path=[] }
                     }
                 },onMinimize:{
-                    withAnimation(.snappy(duration:0.28)) {
+                    withAnimation(.spring(response:0.5,dampingFraction:0.88)) {
                         playback.minimized=true
                         presentation.leavePlayback()
                     }
@@ -144,7 +148,8 @@ struct ContentView:View {
                 }
             }
             .background(.black).ignoresSafeArea()
-            .animation(.snappy(duration:0.3),value:playback.commentsOpen)
+            .transition(.playerCollapse)
+            .animation(.spring(response:0.5,dampingFraction:0.9),value:playback.commentsOpen)
         }
         }.toolbar(removing:.sidebarToggle)
             .toolbarVisibility(.visible,for:.windowToolbar)
@@ -434,5 +439,26 @@ struct ChannelDirectory:View {
             .frame(maxWidth:.infinity)
             .padding(32)
         }
+    }
+}
+
+private struct PlayerCollapseModifier:ViewModifier {
+    let scale:CGFloat
+    let y:CGFloat
+    let opacity:Double
+    func body(content:Content)->some View {
+        content
+            .scaleEffect(scale,anchor:.bottom)
+            .offset(y:y)
+            .opacity(opacity)
+    }
+}
+extension AnyTransition {
+    /// 播放器出现时轻微放大淡入，收起时向底部播放条方向缩小淡出。
+    static var playerCollapse:AnyTransition {
+        .asymmetric(
+            insertion:.modifier(active:PlayerCollapseModifier(scale:1.02,y:28,opacity:0),identity:PlayerCollapseModifier(scale:1,y:0,opacity:1)),
+            removal:.modifier(active:PlayerCollapseModifier(scale:0.9,y:80,opacity:0),identity:PlayerCollapseModifier(scale:1,y:0,opacity:1))
+        )
     }
 }

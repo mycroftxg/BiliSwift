@@ -91,7 +91,7 @@ struct MiniPlayerBar:View {
 
     private func restore() {
         playback.minimized=false
-        withAnimation(.snappy(duration:0.28)) { presentation.immersive=true }
+        withAnimation(.spring(response:0.5,dampingFraction:0.88)) { presentation.immersive=true }
     }
     private func subtitle(_ video:Video)->String {
         if video.roomID != nil { return video.author }
