@@ -56,7 +56,7 @@ struct DynamicDetailView:View {
                     }
                 }
                 if loading { ProgressView().controlSize(.small).padding(.vertical,8) }
-                if hasMore,!comments.isEmpty { Button("加载更多评论") { Task { await load(more:true) } }.buttonStyle(.bordered).disabled(loading) }
+                if !comments.isEmpty { AutoLoadFooter(hasMore:hasMore,loading:loading) { await load(more:true) } }
                 if comments.isEmpty,!loading { Text(errorText ?? "还没有评论").font(.callout).foregroundStyle(.secondary) }
             }
             .padding(28)

@@ -252,10 +252,7 @@ struct ContentView:View {
                             ForEach(catalog.videos) { video in NavigationLink(value:AppRoute.video(video)) { VideoCard(video:video) }.buttonStyle(.plain) }
                         }
                         }
-                        if catalog.canLoadMore {
-                            if nativeCatalog { Text(catalog.loading ? "正在发现更多视频…":"继续向下浏览").font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity).padding(.vertical,12) }
-                            else { HStack { Spacer();Button("加载更多") { Task { await reload(more:true) } }.disabled(catalog.loading);Spacer() } }
-                        }
+                        AutoLoadFooter(hasMore:catalog.canLoadMore,loading:catalog.loading) { await reload(more:true) }
                     } else if !catalog.loading,catalog.error==nil {
                         ContentUnavailableView(route == .search ? "搜索你想看的内容":"这里还没有视频",systemImage:route.symbol,description:Text(route == .search ? "输入关键词后按回车搜索。":"登录后可查看在线资料库；观看视频后会保存本地进度。"))
                     }

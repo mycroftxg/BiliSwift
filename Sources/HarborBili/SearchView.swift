@@ -145,7 +145,7 @@ struct NativeSearchView:View {
                         }
                         if model.loading {ProgressView("正在搜索…").frame(maxWidth:.infinity)}
                         if !model.loading,model.failure==nil,model.videos.isEmpty,model.licensedVideos.isEmpty,model.users.isEmpty,model.articles.isEmpty {ContentUnavailableView("没有找到结果",systemImage:"magnifyingglass",description:Text("尝试更换关键词或搜索分类。")).frame(maxWidth:.infinity)}
-                        if model.hasMore {Button("更多结果") {Task {await model.load(more:true)}}.buttonStyle(.glass).frame(maxWidth:.infinity).disabled(model.loading)}
+                        AutoLoadFooter(hasMore:model.hasMore,loading:model.loading) { await model.load(more:true) }
                     }.padding(32)
                 }.onScrollGeometryChange(for:Bool.self) {$0.contentOffset.y+$0.containerSize.height>$0.contentSize.height-400} action:{_,value in nearBottom=value;if value,model.hasMore,!model.loading {Task {await model.load(more:true)}}}
             }

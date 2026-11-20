@@ -304,7 +304,7 @@ struct CreatorHomeView:View {
         }
         if model.loading {ProgressView("正在加载…").frame(maxWidth:.infinity)}
         if !model.loading,model.failure==nil,tab != .about,model.videos.isEmpty,model.posts.isEmpty,model.collections.isEmpty,model.people.isEmpty,model.articles.isEmpty,model.audio.isEmpty {ContentUnavailableView("暂无公开内容",systemImage:"rectangle.stack",description:Text("该栏目暂无内容，或 UP 主未公开此信息。")).frame(maxWidth:.infinity)}
-        if model.more,!model.loading {Button("加载更多") {Task {await model.load(creator.mid,tab:tab,more:true)}}.buttonStyle(.glass).frame(maxWidth:.infinity)}
+        AutoLoadFooter(hasMore:model.more,loading:model.loading) { await model.load(creator.mid,tab:tab,more:true) }
     }
     private func videoGrid(_ videos:[Video])->some View {LazyVGrid(columns:[GridItem(.adaptive(minimum:220,maximum:360),spacing:20)],spacing:26) {ForEach(videos) {video in NavigationLink(value:AppRoute.video(video)) {VideoCard(video:video)}.buttonStyle(.plain)}}}
     private func follow() {
@@ -339,7 +339,7 @@ struct CreatorCollectionView:View {
     @State private var more=true
     @State private var failure:String?
     var body:some View {
-        ScrollView {VStack(alignment:.leading,spacing:24) {Text(collection.title).font(.largeTitle.bold());if let failure {Text(failure).foregroundStyle(.red)};LazyVGrid(columns:[GridItem(.adaptive(minimum:220,maximum:360),spacing:20)],spacing:26) {ForEach(videos) {video in NavigationLink(value:AppRoute.video(video)) {VideoCard(video:video)}.buttonStyle(.plain)}};if loading {ProgressView()};if more {Button("加载更多") {Task {await load()}}.buttonStyle(.glass).disabled(loading)}}.padding(32)}.navigationTitle(collection.title).task {presentation.toolbarOverCover=false;await load()}
+        ScrollView {VStack(alignment:.leading,spacing:24) {Text(collection.title).font(.largeTitle.bold());if let failure {Text(failure).foregroundStyle(.red)};LazyVGrid(columns:[GridItem(.adaptive(minimum:220,maximum:360),spacing:20)],spacing:26) {ForEach(videos) {video in NavigationLink(value:AppRoute.video(video)) {VideoCard(video:video)}.buttonStyle(.plain)}};if loading {ProgressView()};AutoLoadFooter(hasMore:more,loading:loading) { await load() }}.padding(32)}.navigationTitle(collection.title).task {presentation.toolbarOverCover=false;await load()}
     }
     private func load() async {
         guard !loading,more else{return};loading=true;defer{loading=false}

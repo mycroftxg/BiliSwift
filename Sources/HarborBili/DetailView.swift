@@ -121,7 +121,7 @@ struct DetailView:View {
                     },onLogin:{login=true}).id(model.comments[index]["rpid"].string)
                 }
             }
-            if !model.comments.isEmpty,model.hasMoreComments { Button("加载更多评论") { Task { await model.moreComments(video) } }.buttonStyle(.glass).disabled(model.busy) }
+            if !model.comments.isEmpty { AutoLoadFooter(hasMore:model.hasMoreComments,loading:model.busy) { await model.moreComments(video) } }
         }.frame(maxWidth:920,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading)
     }
     private var detailHero:some View {

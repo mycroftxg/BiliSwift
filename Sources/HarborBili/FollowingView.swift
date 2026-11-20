@@ -36,7 +36,7 @@ struct FollowingView:View {
                                 }.buttonStyle(.plain)
                             }
                         }
-                        if more,!loading { Button("加载更多") { Task { await load() } }.buttonStyle(.glass).frame(maxWidth:.infinity) }
+                        AutoLoadFooter(hasMore:more,loading:loading) { await load() }
                         if !loading,people.isEmpty { ContentUnavailableView("还没有关注任何 UP 主",systemImage:"person.2.slash") }
                     }.padding(32)
                 }
