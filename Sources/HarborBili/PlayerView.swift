@@ -316,7 +316,7 @@ struct PlayerPanel:View {
             .layoutPriority(symbol == nil ? 1:0)
         }.buttonStyle(.glass).buttonBorderShape(.capsule).help(title).accessibilityLabel(title)
             .popover(isPresented:Binding(get:{popover==panel},set:{if !$0 {popover=nil;reveal()}})) {
-                popoverContent(panel).padding(18).frame(width:panel == .info ? 400:panel == .danmaku ? 340:270)
+                popoverContent(panel).padding(18).frame(width:panel == .info ? 400:panel == .episodes ? 400:panel == .danmaku ? 340:270)
                     .environment(\.colorScheme,preferences.colorScheme ?? .dark)
             }
     }
