@@ -6,6 +6,7 @@ struct MiniPlayerBar:View {
     @Environment(PlaybackController.self) private var playback
     @Environment(WindowPresentation.self) private var presentation
     @State private var scrub:Double?
+    @State private var showEpisodes=false
 
     var body:some View {
         if let video=playback.video {
@@ -72,11 +73,53 @@ struct MiniPlayerBar:View {
                         .accessibilityLabel("音量")
                 }
 
-                Button(action:restore) { Image(systemName:"chevron.up").font(.system(size:12,weight:.semibold)) }
-                    .buttonStyle(.plain).foregroundStyle(.white.opacity(0.75)).help("展开播放器")
+                Button { showEpisodes.toggle() } label:{
+                    Image(systemName:"list.bullet")
+                        .font(.system(size:14,weight:.semibold))
+                        .frame(width:32,height:32)
+                        .background(.white.opacity(showEpisodes ? 0.18:0.09),in:.circle)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.85))
+                .disabled(playback.episodes.isEmpty)
+                .help(playback.episodes.isEmpty ? "暂无选集":"选集")
+                .popover(isPresented:$showEpisodes,arrowEdge:.bottom) {
+                    VStack(alignment:.leading,spacing:0) {
+                        HStack { Text("选集").font(.headline);Spacer();Text("\(playback.episodes.count) 集").font(.caption).foregroundStyle(.secondary) }.padding(14)
+                        Divider()
+                        ScrollView {
+                            LazyVStack(spacing:0) {
+                                ForEach(Array(playback.episodes.enumerated()),id:\.offset) { index,episode in
+                                    Button {
+                                        showEpisodes=false
+                                        Task { await playback.playEpisode(episode) }
+                                    } label:{
+                                        HStack(spacing:10) {
+                                            Text("第 \(index+1) 集").font(.caption).foregroundStyle(.secondary).frame(width:54,alignment:.leading)
+                                            Text(episode.title).font(.callout).lineLimit(1)
+                                            Spacer()
+                                            if playback.currentEpisodeIndex==index { Image(systemName:"checkmark").foregroundStyle(.tint) }
+                                        }
+                                        .padding(.horizontal,14).padding(.vertical,8)
+                                        .contentShape(.rect)
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }.frame(maxHeight:300)
+                    }.frame(width:300)
+                }
 
-                Button { playback.stop() } label:{ Image(systemName:"xmark").font(.system(size:12,weight:.semibold)) }
-                    .buttonStyle(.plain).foregroundStyle(.white.opacity(0.55)).help("停止播放并关闭")
+                Button { withAnimation(.snappy(duration:0.25)) { playback.miniBarHidden=true } } label:{
+                    Image(systemName:"xmark")
+                        .font(.system(size:13,weight:.semibold))
+                        .frame(width:32,height:32)
+                        .background(.white.opacity(0.09),in:.circle)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.65))
+                .help("关闭播放条（继续后台播放）")
             }
             .foregroundStyle(.white)
             .padding(.horizontal,14).padding(.vertical,10)
@@ -91,6 +134,7 @@ struct MiniPlayerBar:View {
 
     private func restore() {
         playback.minimized=false
+        playback.miniBarHidden=false
         withAnimation(.spring(response:0.5,dampingFraction:0.88)) { presentation.immersive=true }
     }
     private func subtitle(_ video:Video)->String {

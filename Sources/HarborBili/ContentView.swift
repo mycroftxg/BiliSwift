@@ -102,7 +102,7 @@ struct ContentView:View {
             .opacity(presentation.immersive ? 0:1)
             .allowsHitTesting(!presentation.immersive).accessibilityHidden(presentation.immersive)
             .overlay(alignment:.bottom) {
-                if playback.video != nil,!presentation.immersive {
+                if playback.video != nil,!presentation.immersive,!playback.miniBarHidden {
                     HStack(spacing:0) {
                         Spacer().frame(width:sidebarWidth)
                         Spacer(minLength:0)
@@ -138,6 +138,7 @@ struct ContentView:View {
                 },onMinimize:{
                     withAnimation(.spring(response:0.5,dampingFraction:0.88)) {
                         playback.minimized=true
+                        playback.miniBarHidden=false
                         presentation.leavePlayback()
                     }
                 })
