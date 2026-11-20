@@ -12,10 +12,10 @@ struct MiniPlayerBar:View {
         if let video=playback.video {
             HStack(spacing:14) {
                 Button(action:restore) {
-                    CoverImage(source:video.cover,width:160,showsPlaceholderIcon:false)
-                        .frame(width:46,height:46)
-                        .clipShape(.rect(cornerRadius:8))
-                        .overlay { RoundedRectangle(cornerRadius:8).strokeBorder(.white.opacity(0.12),lineWidth:1) }
+                    CoverImage(source:video.cover,width:320,showsPlaceholderIcon:false)
+                        .frame(width:72,height:41)
+                        .clipShape(.rect(cornerRadius:7))
+                        .overlay { RoundedRectangle(cornerRadius:7).strokeBorder(.white.opacity(0.12),lineWidth:1) }
                 }.buttonStyle(.plain).help("展开播放器")
 
                 VStack(alignment:.leading,spacing:4) {
@@ -89,6 +89,7 @@ struct MiniPlayerBar:View {
                         showEpisodes=false
                         Task { await playback.playEpisode(episode) }
                     }
+                    .frame(width:380)
                 }
 
                 Button { withAnimation(.snappy(duration:0.25)) { playback.miniBarHidden=true } } label:{
