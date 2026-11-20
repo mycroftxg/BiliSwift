@@ -54,10 +54,22 @@ enum Destination:String,CaseIterable,Identifiable {
     private var dynamicOffset=""
     private var feedFresh=0
     private var generation=UUID()
+    private struct Snapshot { let videos:[Video];let hasMore:Bool;let date:Date }
+    private var snapshots:[String:Snapshot]=[:]
+    private func cacheKey(_ destination:Destination,keyword:String,channel:BiliChannel?)->String {
+        "\(destination.rawValue)|\(keyword)|\(channel?.id ?? "")"
+    }
     func load(_ destination:Destination,keyword:String,account:AccountSession,library:LocalLibrary,more:Bool=false,channel:BiliChannel?=nil) async {
         let ticket:UUID
+        let key=cacheKey(destination,keyword:keyword,channel:channel)
         if more { guard !loading,canLoadMore else { return }; ticket=generation }
-        else { feedFresh &+= 1; ticket=UUID();generation=ticket;videos=[];dynamics=[];page=1;canLoadMore=true;historyMax="0";historyAt="0";dynamicOffset="" }
+        else {
+            feedFresh &+= 1; ticket=UUID();generation=ticket;videos=[];dynamics=[];page=1;canLoadMore=true;historyMax="0";historyAt="0";dynamicOffset=""
+            if let hit=snapshots[key] {
+                videos=hit.videos;canLoadMore=hit.hasMore
+                if Date().timeIntervalSince(hit.date)<60 { return }
+            }
+        }
         loading=true;error=nil
         defer { if generation==ticket { loading=false } }
         do {
@@ -72,10 +84,21 @@ enum Destination:String,CaseIterable,Identifiable {
             case .home:
                 // 首页推荐一次取多页，保证「热门精选 / 继续发现 / 为你发现更多」三段都有内容。
                 var seen=Set(videos.map(\.id))
-                for index in (more ? [page]:[1,2,3]) {
-                    let batch=try await BiliAPI.shared.homeFeed(page:index,fresh:feedFresh)
+                if more {
+                    let batch=try await BiliAPI.shared.homeFeed(page:page,fresh:feedFresh)
                     for video in batch where !video.bvid.isEmpty && !seen.contains(video.id) {
                         seen.insert(video.id);result.append(video)
+                    }
+                } else {
+                    // 首屏三页并发请求，避免串行等待 3 次往返。
+                    async let first=BiliAPI.shared.homeFeed(page:1,fresh:feedFresh)
+                    async let second=BiliAPI.shared.homeFeed(page:2,fresh:feedFresh)
+                    async let third=BiliAPI.shared.homeFeed(page:3,fresh:feedFresh)
+                    let batches=try await [first,second,third]
+                    for batch in batches {
+                        for video in batch where !video.bvid.isEmpty && !seen.contains(video.id) {
+                            seen.insert(video.id);result.append(video)
+                        }
                     }
                 }
             case .search:
@@ -128,8 +151,9 @@ enum Destination:String,CaseIterable,Identifiable {
                 || (destination == .dynamic && !dynamicOffset.isEmpty && !result.isEmpty)
             if let reportedMore { canLoadMore=reportedMore }
             if more && fresh.isEmpty { canLoadMore=false }
+            if !more { snapshots[key]=Snapshot(videos:videos,hasMore:canLoadMore,date:Date()) }
             page += 1
         } catch { if generation==ticket { self.error=error.localizedDescription } }
     }
-    func resetAccountData() { generation=UUID();videos=[];folders=[];folderID=0;loading=false }
+    func resetAccountData() { generation=UUID();videos=[];folders=[];folderID=0;loading=false;snapshots.removeAll() }
 }

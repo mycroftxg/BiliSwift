@@ -125,14 +125,21 @@ import HarborCore
             guard let chosen=compatibleVideo(data.video) else { throw BiliError.invalid("此内容未返回可适配的 DASH 片源，可在官方网页检查权限。") }
             let audio=compatibleAudio(data.audio)
             if audio==nil { throw BiliError.invalid("片源未返回兼容音轨，暂不进行无声播放。") }
-            var resume=(preferences?.values.resume ?? true) ? library.progress(video.bvid,cid:cid):0
-            if resume==0,(preferences?.values.resume ?? true), let info=try? await BiliAPI.shared.subtitleInfo(bvid:video.bvid,cid:cid),info["last_play_cid"].int==cid {
-                resume=max(0,info["last_play_time"].double/1000)
-            }
+            let resume=(preferences?.values.resume ?? true) ? library.progress(video.bvid,cid:cid):0
             guard ticket==generation else { return }
+            // 先起播，云端续播信息在后台补齐，避免多一次网络往返拖慢加载。
             try await configure(video:chosen,audio:audio,position:resume,ticket:ticket)
             guard ticket==generation else { return }
             startMonitor(ticket:ticket)
+            if resume==0,(preferences?.values.resume ?? true) {
+                Task { [weak self] in
+                    guard let self,let info=try? await BiliAPI.shared.subtitleInfo(bvid:video.bvid,cid:cid),
+                          info["last_play_cid"].int==cid else { return }
+                    let time=info["last_play_time"].double/1000
+                    guard time>3,self.generation==ticket,self.seconds<3 else { return }
+                    self.seek(time)
+                }
+            }
             Task { await self.loadTimedText(bvid:video.bvid,cid:cid,ticket:ticket) }
             Task { await self.loadComments(video:video) }
             Task {

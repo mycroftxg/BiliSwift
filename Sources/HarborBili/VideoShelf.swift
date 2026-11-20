@@ -82,7 +82,7 @@ struct HeroCarousel:View {
             .task(id:slides.map(\.id).joined(separator:",")) {
                 guard !slides.isEmpty else { return }
                 // 低电量模式只预取当前一张；正常模式预取全部，切换更顺。
-                let candidates=preferences.values.lowPowerMode ? [slides[min(index,slides.count-1)]] : slides
+                let candidates=preferences.values.lowPowerMode ? [slides[min(index,slides.count-1)]] : Array(slides.prefix(3))
                 for video in candidates {
                     guard !Task.isCancelled else { return }
                     await prefetch(video)
@@ -104,7 +104,7 @@ struct HeroCarousel:View {
                   !Task.isCancelled else { return }
             _ = await TMDBPosters.shared.backdrop(for:video,detail:detail,token:preferences.values.tmdbToken)
         } else {
-            _ = await RemoteImageStore.shared.image(video.cover,width:1440)
+            _ = await RemoteImageStore.shared.image(video.cover,width:1280)
         }
     }
     private func step(by offset:Int) {

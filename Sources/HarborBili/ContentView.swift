@@ -367,7 +367,7 @@ struct HeroCard:View {
                         CoverImage(source:video.cover,width:1920,showsPlaceholderIcon:false,fit:contained)
                     }
                 }
-                .frame(width:geometry.size.width,height:height).clipped().backgroundExtensionEffect()
+                .frame(width:geometry.size.width,height:height).clipped()
             }
         }.frame(height:height)
             .task(id: video.id) {
