@@ -437,6 +437,7 @@ import HarborCore
     func stop() {
         persist();generation=UUID();monitor?.cancel();monitor=nil;player.pause();player.replaceCurrentItem(with:nil)
         seconds=0;duration=0;playing=false;loading=false;ended=false;manifest=nil;selectedVideo=nil;selectedAudio=nil
+        video=nil;cid=0
         cancelAutoNext();showNextPreview=false;minimized=false;miniBarHidden=false;liveQualities=[];liveQuality=0;liveRoomID=nil;stopLiveChat()
         danmaku=[];subtitles=[];subtitleChoices=[];subtitleID="";episodes=[];episodesLoading=false;videoComments=[];commentsAid=0;commentsOpen=false;videoTint=nil
         NowPlayingCenter.shared.clear()
