@@ -128,7 +128,7 @@ struct DetailView:View {
         GeometryReader { geometry in
             ZStack(alignment:.bottomLeading) {
                 let textWidth=max(220,min(650,geometry.size.width-88))
-                CoverImage(source:video.cover,width:1920).frame(width:geometry.size.width,height:heroHeight).clipped().backgroundExtensionEffect()
+                CoverImage(source:video.cover,width:1920).frame(width:geometry.size.width,height:heroHeight).clipped()
                 LinearGradient(colors:[.black.opacity(0.35),.clear],startPoint:.top,endPoint:.bottom)
                 LinearGradient(stops:[.init(color:.clear,location:0.15),.init(color:.black.opacity(0.3),location:0.45),.init(color:.black.opacity(0.9),location:1)],startPoint:.top,endPoint:.bottom)
                 LinearGradient(colors:[.black.opacity(0.35),.clear],startPoint:.leading,endPoint:.trailing)

@@ -120,8 +120,17 @@ struct ContentView:View {
             HStack(spacing:0) {
                 PlayerPanel(immersive:true,onBack:{
                     presentation.leavePlayback();playback.player.pause()
-                    // 返回时重建为单层详情，避免导航栈里残留多个 destination 造成界面重叠。
-                    if let video=playback.video { path=[.video(video)] } else { path=[] }
+                    // 先清空导航栈、下一帧再压入单层详情，避免旧 destination 与新详情同帧过渡造成重叠。
+                    var transaction=Transaction();transaction.disablesAnimations=true
+                    if let video=playback.video {
+                        withTransaction(transaction) { path=[] }
+                        DispatchQueue.main.async {
+                            var next=Transaction();next.disablesAnimations=true
+                            withTransaction(next) { path=[.video(video)] }
+                        }
+                    } else {
+                        withTransaction(transaction) { path=[] }
+                    }
                 },onMinimize:{
                     withAnimation(.snappy(duration:0.28)) {
                         playback.minimized=true
