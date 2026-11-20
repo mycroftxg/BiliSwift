@@ -107,7 +107,12 @@ final class NowPlayingCenter {
             Task { @MainActor [weak self] in
                 guard let self, let image = await RemoteImageStore.shared.image(video.cover, width: 600) else { return }
                 guard self.artworkKey == video.cover else { return }
-                self.artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                let data = image.tiffRepresentation
+                let size = image.size
+                self.artwork = MPMediaItemArtwork(boundsSize: size) { @Sendable _ in
+                    if let data, let decoded = NSImage(data: data) { return decoded }
+                    return NSImage(size: size)
+                }
                 self.update(from: controller, force: true)
             }
         }
