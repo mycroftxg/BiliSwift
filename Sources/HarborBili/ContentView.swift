@@ -262,7 +262,7 @@ struct ContentView:View {
             }.ignoresSafeArea(edges:nativeCatalog ? .top:[])
                 .id(selection+homeJump.uuidString)
                 .onScrollGeometryChange(for:Bool.self) { geometry in
-                    geometry.contentOffset.y+geometry.containerSize.height>geometry.contentSize.height-420
+                    geometry.contentOffset.y+geometry.containerSize.height>geometry.contentSize.height-750
                 } action:{ _,value in if nearBottom != value { nearBottom=value;if value { loadNextHomePage() } } }
                 .onScrollGeometryChange(for:Bool.self) { geometry in
                     nativeCatalog && geometry.contentOffset.y<heroHeight-65
