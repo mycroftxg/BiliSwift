@@ -672,14 +672,7 @@ struct PlayerCommentRow:View {
             if !replies.isEmpty {
                 VStack(alignment:.leading,spacing:10) {
                     ForEach(Array(replies.enumerated()),id:\.offset) { _,reply in
-                        HStack(alignment:.top,spacing:8) {
-                            CoverImage(source:reply["member"]["avatar"].string,width:64,showsPlaceholderIcon:false)
-                                .frame(width:24,height:24).clipShape(.circle).clipped()
-                            VStack(alignment:.leading,spacing:3) {
-                                Text(reply["member"]["uname"].string).font(.caption2.weight(.semibold)).foregroundStyle(.white.opacity(0.55))
-                                Text(reply["content"]["message"].string).font(.caption).foregroundStyle(.white).fixedSize(horizontal:false,vertical:true)
-                            }
-                        }.padding(.leading,44)
+                        PlayerReplyRow(reply:reply,rootRpid:rpid,aid:aid,onReplied:onReplied)
                     }
                 }
             } else if rcount>0 {
@@ -719,6 +712,97 @@ struct PlayerCommentRow:View {
             _=try await BiliAPI.shared.request("/x/v2/reply/add",["oid":"\(aid)","type":"1","root":"\(rpid)","parent":"\(rpid)","message":text,"plat":"1"],post:true)
             draft="";showReply=false;message="已回复"
             onReplied(rpid)
+        } catch {
+            if case BiliError.loginRequired = error { message="请先登录后再回复" }
+            else { message="回复失败：\(error.localizedDescription)" }
+        }
+    }
+}
+
+/// 楼中楼回复：同样支持点赞与继续回复（root 用楼层根评论，parent 用当前回复）。
+struct PlayerReplyRow:View {
+    let reply:JSON
+    let rootRpid:Int
+    let aid:Int
+    var onReplied:(Int)->Void = { _ in }
+    @State private var liked:Bool
+    @State private var likeCount:Int
+    @State private var busy=false
+    @State private var showReply=false
+    @State private var draft=""
+    @State private var sending=false
+    @State private var message:String?
+
+    init(reply:JSON,rootRpid:Int,aid:Int,onReplied:@escaping (Int)->Void = { _ in }) {
+        self.reply=reply;self.rootRpid=rootRpid;self.aid=aid;self.onReplied=onReplied
+        _liked=State(initialValue: reply["action"].int == 1)
+        _likeCount=State(initialValue: reply["like"].int)
+    }
+    private var rpid:Int { reply["rpid"].int }
+    private var uname:String { reply["member"]["uname"].string.isEmpty ? "用户":reply["member"]["uname"].string }
+
+    var body:some View {
+        HStack(alignment:.top,spacing:8) {
+            CoverImage(source:reply["member"]["avatar"].string,width:64,showsPlaceholderIcon:false)
+                .frame(width:24,height:24).clipShape(.circle).clipped()
+            VStack(alignment:.leading,spacing:3) {
+                Text(uname).font(.caption2.weight(.semibold)).foregroundStyle(.white.opacity(0.55))
+                Text(reply["content"]["message"].string).font(.caption).foregroundStyle(.white).fixedSize(horizontal:false,vertical:true)
+                HStack(spacing:12) {
+                    Button { Task { await toggleLike() } } label:{
+                        Label("\(likeCount)",systemImage:liked ? "hand.thumbsup.fill":"hand.thumbsup")
+                            .foregroundStyle(liked ? Color.pink : Color.white.opacity(0.5))
+                    }.buttonStyle(.plain).disabled(busy).accessibilityLabel(liked ? "取消点赞":"点赞")
+                    Button { withAnimation(.snappy(duration:0.2)) { showReply.toggle() } } label:{
+                        Label("回复",systemImage:"bubble.right").foregroundStyle(showReply ? Color.cyan : Color.white.opacity(0.5))
+                    }.buttonStyle(.plain).accessibilityLabel("回复这条回复")
+                }.font(.caption2)
+                if let message { Text(message).font(.caption2).foregroundStyle(.white.opacity(0.6)) }
+                if showReply {
+                    HStack(spacing:8) {
+                        TextField("回复 @\(uname)",text:$draft,axis:.vertical)
+                            .textFieldStyle(.plain).lineLimit(1...4)
+                            .padding(.horizontal,10).padding(.vertical,7)
+                            .background(.white.opacity(0.08),in:.rect(cornerRadius:8))
+                            .onSubmit { Task { await sendReply() } }
+                        Button(sending ? "发送中…":"发送") { Task { await sendReply() } }
+                            .buttonStyle(.glass).controlSize(.small)
+                            .disabled(sending || draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }.padding(.leading,44)
+    }
+
+    private func toggleLike() async {
+        guard !busy,rpid>0 else { return }
+        busy=true;defer { busy=false }
+        let target = !liked
+        withAnimation(.snappy(duration:0.18)) {
+            liked=target
+            likeCount=max(0,likeCount+(target ? 1 : -1))
+        }
+        do {
+            _=try await BiliAPI.shared.request("/x/v2/reply/action",["oid":"\(aid)","type":"1","rpid":"\(rpid)","action":target ? "1":"0"],post:true)
+            message=nil
+        } catch {
+            withAnimation(.snappy(duration:0.18)) {
+                liked = !target
+                likeCount=max(0,likeCount+(target ? -1 : 1))
+            }
+            if case BiliError.loginRequired = error { message="请先登录后再点赞" }
+            else { message="点赞失败：\(error.localizedDescription)" }
+        }
+    }
+
+    private func sendReply() async {
+        let text=draft.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !sending,!text.isEmpty,rpid>0 else { return }
+        sending=true;defer { sending=false }
+        do {
+            _=try await BiliAPI.shared.request("/x/v2/reply/add",["oid":"\(aid)","type":"1","root":"\(rootRpid)","parent":"\(rpid)","message":text,"plat":"1"],post:true)
+            draft="";showReply=false;message="已回复"
+            onReplied(rootRpid)
         } catch {
             if case BiliError.loginRequired = error { message="请先登录后再回复" }
             else { message="回复失败：\(error.localizedDescription)" }
