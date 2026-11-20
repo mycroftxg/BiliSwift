@@ -74,7 +74,6 @@ struct ContentView:View {
                         .padding(.horizontal,10).padding(.bottom,10)
                 }
         } detail: {
-            ZStack(alignment:.bottom) {
             NavigationStack(path:$path) {
                 catalogContent.onGeometryChange(for:CGSize.self) { $0.size } action:{ viewport=$0 }.navigationTitle(presentation.immersive || presentation.toolbarOverCover ? "":channel?.title ?? route.rawValue)
                     .navigationDestination(for:AppRoute.self) { route in
@@ -97,12 +96,15 @@ struct ContentView:View {
                         ToolbarItem { if !presentation.immersive,!account.loggedIn { Button("登录") { login=true } } }
                     }
             }
-            if playback.video != nil,!presentation.immersive {
-                MiniPlayerBar()
-                    .padding(.horizontal,16).padding(.bottom,12)
-                    .transition(.move(edge:.bottom).combined(with:.opacity))
-                    .zIndex(10)
-            }
+            .safeAreaInset(edge:.bottom,spacing:0) {
+                if playback.video != nil,!presentation.immersive {
+                    MiniPlayerBar()
+                        .frame(maxWidth:680)
+                        .padding(.horizontal,16).padding(.bottom,10)
+                        .contentShape(.rect)
+                        .zIndex(20)
+                        .transition(.move(edge:.bottom).combined(with:.opacity))
+                }
             }
             .animation(.snappy(duration:0.3),value:playback.minimized)
             .animation(.snappy(duration:0.3),value:presentation.immersive)

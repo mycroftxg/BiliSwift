@@ -81,8 +81,10 @@ struct MiniPlayerBar:View {
             .foregroundStyle(.white)
             .padding(.horizontal,14).padding(.vertical,10)
             .glassEffect(.regular.tint(.black.opacity(0.3)),in:.rect(cornerRadius:16))
+            .contentShape(.rect(cornerRadius:16))
             .shadow(color:.black.opacity(0.28),radius:18,y:8)
             .environment(\.colorScheme,.dark)
+            .zIndex(20)
             .accessibilityElement(children:.contain)
         }
     }
