@@ -843,24 +843,29 @@ struct EpisodePicker:View {
                                         .frame(width:38,height:24)
                                         .background(current ? AnyShapeStyle(.tint.opacity(0.25)):AnyShapeStyle(.white.opacity(0.08)),in:.rect(cornerRadius:6))
                                     Text(episode.title).font(.callout).lineLimit(2)
-                                        .frame(maxWidth:.infinity,alignment:.leading)
+                                        .frame(width:190,alignment:.leading)
+                                        .fixedSize(horizontal:false,vertical:true)
                                         .foregroundStyle(current ? Color.primary:Color.secondary)
                                     Spacer(minLength:4)
-                                    if current {
-                                        Image(systemName:"waveform").font(.caption).foregroundStyle(.tint)
-                                        Text("正在播放").font(.caption2.weight(.semibold)).foregroundStyle(.tint)
-                                    } else {
-                                        Image(systemName:"play.fill").font(.caption2).foregroundStyle(.tertiary)
-                                    }
+                                    HStack(spacing:4) {
+                                        if current {
+                                            Image(systemName:"waveform").font(.caption).foregroundStyle(.tint)
+                                            Text("正在播放").font(.caption2.weight(.semibold)).foregroundStyle(.tint)
+                                        } else {
+                                            Image(systemName:"play.fill").font(.caption2).foregroundStyle(.tertiary)
+                                        }
+                                    }.frame(width:66,alignment:.trailing)
                                 }
+                                .frame(width:344,alignment:.leading)
                                 .padding(.horizontal,8).padding(.vertical,7)
                                 .background(current ? AnyShapeStyle(.tint.opacity(0.14)):AnyShapeStyle(.clear),in:.rect(cornerRadius:8))
                                 .contentShape(.rect)
                             }.buttonStyle(.plain)
                             .id(index)
                         }
-                    }.padding(8)
+                    }.frame(width:360,alignment:.leading).padding(.vertical,8)
                 }
+                .frame(width:360)
                 .onAppear { scroll(proxy) }
                 .onChange(of:currentIndex) { _,_ in scroll(proxy) }
             }
