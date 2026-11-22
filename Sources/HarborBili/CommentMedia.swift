@@ -64,7 +64,7 @@ struct CommentTextView:View {
     let text:String
     let emotes:[String:String]
     var font:Font = .callout
-    var color:Color = .white
+    var color:Color = .primary
     @State private var images:[String:NSImage]=[:]
 
     var body:some View {

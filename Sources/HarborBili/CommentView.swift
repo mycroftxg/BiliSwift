@@ -24,7 +24,14 @@ struct CommentRow:View {
                     Text(entry["member"]["uname"].string).font(.system(size:13,weight:.semibold)).foregroundStyle(.secondary)
                     if entry["member"]["vip"]["vipStatus"].int==1 { Text("大会员").font(.system(size:9,weight:.medium)).foregroundStyle(.pink).padding(.horizontal,5).padding(.vertical,2).background(.pink.opacity(0.08),in:.capsule) }
                 }
-                Text(entry["content"]["message"].string).font(.system(size:14)).lineSpacing(5).lineLimit(fullText ? nil:8).fixedSize(horizontal:false,vertical:true).textSelection(.enabled)
+                CommentTextView(text:entry["content"]["message"].string,emotes:entry["content"].commentEmoteURLs,font:.system(size:14))
+                    .lineSpacing(5)
+                    .lineLimit(fullText ? nil:8)
+                    .textSelection(.enabled)
+                    .frame(maxWidth:.infinity,alignment:.leading)
+                if !entry["content"].commentPictureURLs.isEmpty {
+                    CommentPictures(urls:entry["content"].commentPictureURLs)
+                }
                 if entry["content"]["message"].string.count>240 || entry["content"]["message"].string.filter({$0=="\n"}).count>6 {
                     Button(fullText ? "收起正文":"展开全文") { fullText.toggle() }.buttonStyle(.plain).font(.system(size:12,weight:.medium)).foregroundStyle(.tint)
                 }
@@ -41,7 +48,14 @@ struct CommentRow:View {
                                 AvatarView(source:reply["member"]["avatar"].string,size:25)
                                 VStack(alignment:.leading,spacing:4) {
                                     Text(reply["member"]["uname"].string).font(.system(size:12,weight:.semibold)).foregroundStyle(.secondary)
-                                    Text(reply["content"]["message"].string).font(.system(size:13)).lineSpacing(4).lineLimit(expanded ? nil:3).textSelection(.enabled)
+                                    CommentTextView(text:reply["content"]["message"].string,emotes:reply["content"].commentEmoteURLs,font:.system(size:13))
+                                        .lineSpacing(4)
+                                        .lineLimit(expanded ? nil:3)
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth:.infinity,alignment:.leading)
+                                    if !reply["content"].commentPictureURLs.isEmpty {
+                                        CommentPictures(urls:reply["content"].commentPictureURLs)
+                                    }
                                 }
                             }
                         }
