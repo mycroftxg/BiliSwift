@@ -265,8 +265,11 @@ struct PlayerPanel:View {
         Group {
             if compact {
                 HStack(spacing:8) {
-                    Text(controller.video?.author ?? "").font(.system(size:10,weight:.medium)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                    edgeFade(Text(controller.video?.title ?? "").font(.system(size:14,weight:.semibold)).lineLimit(1))
+                    Text(controller.video?.author ?? "").font(.system(size:10,weight:.medium)).foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1).truncationMode(.tail).frame(maxWidth:150,alignment:.leading)
+                    edgeFade(MarqueeText(text:controller.video?.title ?? "",font:.system(size:14,weight:.semibold),height:20))
+                        .frame(maxWidth:.infinity,alignment:.leading)
+                        .layoutPriority(1)
                 }
             } else {
                 VStack(alignment:.leading,spacing:4) {
