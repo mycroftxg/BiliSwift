@@ -23,6 +23,7 @@ struct ContentView:View {
     @State private var nearBottom=false
     @State private var viewport=CGSize(width:1000,height:800)
     @State private var sidebarWidth:CGFloat=220
+    @State private var playerLayoutID=UUID()
     private var route:Destination { Destination(rawValue:selection) ?? .channels }
     private var channel:BiliChannel? { selection.hasPrefix("channel.") ? BiliChannel.find(String(selection.dropFirst(8))):nil }
     private var nativeCatalog:Bool { route == .home || route == .live || channel != nil }
@@ -149,6 +150,7 @@ struct ContentView:View {
                 }
             }
             .background(.black).ignoresSafeArea()
+            .id(playerLayoutID)
             .transition(.playerCollapse)
             .animation(.spring(response:0.5,dampingFraction:0.9),value:playback.commentsOpen)
         }
@@ -156,8 +158,8 @@ struct ContentView:View {
             .toolbarVisibility(.visible,for:.windowToolbar)
             .windowToolbarFullScreenVisibility(.onHover)
             .toolbarBackground(presentation.immersive || presentation.toolbarOverCover ? .hidden:.visible,for:.windowToolbar)
-            .onReceive(NotificationCenter.default.publisher(for:NSWindow.didEnterFullScreenNotification)) { _ in presentation.refresh() }
-            .onReceive(NotificationCenter.default.publisher(for:NSWindow.didExitFullScreenNotification)) { _ in presentation.refresh() }
+            .onReceive(NotificationCenter.default.publisher(for:NSWindow.didEnterFullScreenNotification)) { _ in presentLayoutRefresh() }
+            .onReceive(NotificationCenter.default.publisher(for:NSWindow.didExitFullScreenNotification)) { _ in presentLayoutRefresh() }
             .sheet(isPresented:$customizing) {
                 VStack(spacing:0) {
                     HStack { Text("自定义侧栏").font(.title2.bold());Spacer();Button("完成") { customizing=false }.buttonStyle(.glassProminent) }.padding(20)
@@ -174,6 +176,11 @@ struct ContentView:View {
             .onChange(of:account.mid) { _,_ in
                 path=[];presentation.leavePlayback();playback.stop();catalog.resetAccountData()
             }
+    }
+    /// 全屏切换后强制重建播放器布局，避免 AVPlayerLayer/侧栏沿用旧的全屏尺寸。
+    private func presentLayoutRefresh() {
+        presentation.refresh()
+        playerLayoutID=UUID()
     }
     /// 只存在于官方网页的入口：直接交给系统默认浏览器，App 内不保留网页窗口。
     private func externalWebURL(_ raw:String)->URL? {
