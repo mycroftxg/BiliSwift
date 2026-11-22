@@ -229,6 +229,7 @@ struct PlayerPanel:View {
                         VStack(alignment:.leading,spacing:10) {
                             titleBlock(compact:true)
                             controlButtons(compact:true,tight:tight)
+                                .frame(maxWidth:.infinity,alignment:.leading)
                         }
                     } else {
                         HStack(alignment:.bottom) {
@@ -261,13 +262,17 @@ struct PlayerPanel:View {
     }
     @ViewBuilder
     private func titleBlock(compact:Bool)->some View {
-        VStack(alignment:.leading,spacing:4) {
-            Text(controller.video?.author ?? "").font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+        Group {
             if compact {
-                Text(controller.video?.title ?? "")
-                    .font(.system(size:15,weight:.semibold)).lineLimit(1).truncationMode(.middle)
+                HStack(spacing:8) {
+                    Text(controller.video?.author ?? "").font(.system(size:10,weight:.medium)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                    Text(controller.video?.title ?? "").font(.system(size:14,weight:.semibold)).lineLimit(1).truncationMode(.tail)
+                }
             } else {
-                MarqueeText(text:controller.video?.title ?? "",font:.system(size:immersive ? 23:17,weight:.semibold),height:immersive ? 30:22)
+                VStack(alignment:.leading,spacing:4) {
+                    Text(controller.video?.author ?? "").font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                    MarqueeText(text:controller.video?.title ?? "",font:.system(size:immersive ? 23:17,weight:.semibold),height:immersive ? 30:22)
+                }
             }
         }
         .frame(maxWidth:compact ? .infinity:(immersive ? 640:360),alignment:.leading)
@@ -277,25 +282,28 @@ struct PlayerPanel:View {
     @ViewBuilder
     private func controlButtons(compact:Bool,tight:Bool)->some View {
         GlassEffectContainer(spacing:6) {
-            HStack(spacing:compact ? 6:8) {
+            HStack(spacing:compact ? 5:8) {
                 if !compact,controller.nextEpisode != nil {
                     iconButton("forward.end.fill",label:"播放下一集") { Task { await controller.playNextEpisode() } }
                 }
                 if controller.video?.roomID != nil {
-                    iconButton(liveChatVisible ? "bubble.left.and.bubble.right.fill":"bubble.left.and.bubble.right",label:liveChatVisible ? "隐藏实时评论区":"显示实时评论区") { withAnimation(.snappy(duration:0.25)) { liveChatVisible.toggle() } }
-                    iconButton("arrow.clockwise",label:"重新连接直播") { Task { await controller.retryLive() } }
+                    iconButton(liveChatVisible ? "bubble.left.and.bubble.right.fill":"bubble.left.and.bubble.right",label:liveChatVisible ? "隐藏实时评论区":"显示实时评论区",compact:compact) { withAnimation(.snappy(duration:0.25)) { liveChatVisible.toggle() } }
+                    iconButton("arrow.clockwise",label:"重新连接直播",compact:compact) { Task { await controller.retryLive() } }
                 } else {
-                    iconButton("text.bubble.fill",label:controller.commentsOpen ? "隐藏评论":"显示评论") { withAnimation(.snappy(duration:0.3)) { controller.commentsOpen.toggle() } }
+                    iconButton("text.bubble.fill",label:controller.commentsOpen ? "隐藏评论":"显示评论",compact:compact) { withAnimation(.snappy(duration:0.3)) { controller.commentsOpen.toggle() } }
                 }
-                if !tight { popupButton("弹幕",symbol:"text.bubble",panel:.danmaku) }
+                if !tight { popupButton("弹幕",symbol:"text.bubble",panel:.danmaku,compact:compact) }
                 if controller.video?.roomID==nil {
-                    popupButton("选集",symbol:"list.bullet",panel:.episodes)
-                    if !compact, !tight { popupButton("字幕",symbol:"captions.bubble",panel:.subtitles) }
-                    popupButton("\(controller.rate.formatted())×",symbol:nil,panel:.speed)
+                    popupButton("选集",symbol:"list.bullet",panel:.episodes,compact:compact)
+                    if !compact, !tight { popupButton("字幕",symbol:"captions.bubble",panel:.subtitles,compact:compact) }
                 }
-                popupButton(qualityButtonTitle,symbol:nil,panel:.quality,dolbyOnly:controller.selectedVideo?.label.contains("杜比视界") == true)
+                Spacer(minLength:compact ? 6:10)
+                if controller.video?.roomID==nil {
+                    popupButton("\(controller.rate.formatted())×",symbol:nil,panel:.speed,compact:compact)
+                }
+                popupButton(qualityButtonTitle,symbol:nil,panel:.quality,dolbyOnly:controller.selectedVideo?.label.contains("杜比视界") == true,compact:compact)
                 if !compact { popupButton("播放信息",symbol:"info.circle",panel:.info) }
-                fullScreenButton
+                fullScreenButton(compact:compact)
             }
         }
     }
@@ -304,17 +312,19 @@ struct PlayerPanel:View {
         roundButton(immersive ? "返回视频详情":"停止播放并返回详情",symbol:"chevron.left",size:36,action:onBack)
     }
     private enum ControlMetrics { static let height:CGFloat=32;static let width:CGFloat=60;static let icon:CGFloat=13;static let font:CGFloat=12 }
-    private func iconButton(_ symbol:String,label:String,action:@escaping()->Void)->some View {
+    private func metricWidth(_ compact:Bool)->CGFloat { compact ? 44:ControlMetrics.width }
+    private func metricHeight(_ compact:Bool)->CGFloat { compact ? 30:ControlMetrics.height }
+    private func iconButton(_ symbol:String,label:String,compact:Bool=false,action:@escaping()->Void)->some View {
         Button { reveal();action() } label:{
-            Image(systemName:symbol).font(.system(size:ControlMetrics.icon,weight:.semibold))
-                .frame(width:ControlMetrics.width,height:ControlMetrics.height)
+            Image(systemName:symbol).font(.system(size:compact ? 12:ControlMetrics.icon,weight:.semibold))
+                .frame(width:metricWidth(compact),height:metricHeight(compact))
         }.buttonStyle(.glass).buttonBorderShape(.capsule).help(label).accessibilityLabel(label)
     }
-    private var fullScreenButton:some View {
+    private func fullScreenButton(compact:Bool=false)->some View {
         Button {
             reveal();if !immersive {presentation.immersive=true};presentation.toggleFullScreen()
         } label:{ Image(systemName:presentation.fullScreen ? "arrow.down.right.and.arrow.up.left":"arrow.up.left.and.arrow.down.right")
-            .font(.system(size:ControlMetrics.icon,weight:.semibold)).frame(width:ControlMetrics.width,height:ControlMetrics.height) }
+            .font(.system(size:compact ? 12:ControlMetrics.icon,weight:.semibold)).frame(width:metricWidth(compact),height:metricHeight(compact)) }
             .buttonStyle(.glass).buttonBorderShape(.capsule)
             .help(presentation.fullScreen ? "退出全屏":"全屏播放").accessibilityLabel(presentation.fullScreen ? "退出全屏":"全屏播放")
     }
@@ -322,7 +332,7 @@ struct PlayerPanel:View {
         Button { reveal();action() } label:{ Image(systemName:symbol).font(.system(size:size>60 ? 30: size>45 ? 23:16,weight:.medium)).frame(width:size,height:size) }
             .buttonStyle(.glass).buttonBorderShape(.circle).help(title).accessibilityLabel(title)
     }
-    private func popupButton(_ title:String,symbol:String?,panel:PlayerPopover,dolbyOnly:Bool=false)->some View {
+    private func popupButton(_ title:String,symbol:String?,panel:PlayerPopover,dolbyOnly:Bool=false,compact:Bool=false)->some View {
         Button {
             reveal()
             if panel == .episodes {
@@ -341,7 +351,7 @@ struct PlayerPanel:View {
                 else if let symbol { Image(systemName:symbol).font(.system(size:ControlMetrics.icon,weight:.semibold)) }
                 else { Text(title).font(.system(size:ControlMetrics.font,weight:.semibold)).lineLimit(1).minimumScaleFactor(0.72) }
             }
-            .frame(width:ControlMetrics.width,height:ControlMetrics.height)
+            .frame(width:metricWidth(compact),height:metricHeight(compact))
             .layoutPriority(symbol == nil ? 1:0)
         }.buttonStyle(.glass).buttonBorderShape(.capsule).help(title).accessibilityLabel(title)
             .popover(isPresented:Binding(get:{popover==panel},set:{if !$0 {popover=nil;reveal()}})) {
