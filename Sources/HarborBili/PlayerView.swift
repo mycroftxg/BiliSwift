@@ -222,7 +222,7 @@ struct PlayerPanel:View {
                     if controller.video?.roomID==nil {roundButton("前进 10 秒",symbol:"goforward.10",size:52) { controller.seek(controller.seconds+10) }}
                 }
                 Spacer()
-                let compact = size.width < 1040
+                let compact = size.width < 1320
                 let tight = size.width < 520
                 VStack(alignment:.leading,spacing:12) {
                     if compact {
