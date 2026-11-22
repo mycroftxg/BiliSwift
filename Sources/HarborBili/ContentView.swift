@@ -144,7 +144,7 @@ struct ContentView:View {
                 })
                 if playback.commentsOpen,playback.video?.roomID == nil {
                     CommentSidebar(aid:playback.commentsAid,bvid:playback.video?.bvid ?? "",tint:playback.videoTint,comments:playback.videoComments,onClose:{ withAnimation(.snappy(duration:0.3)) { playback.commentsOpen=false } })
-                        .frame(width:380)
+                        .frame(width:min(380,max(280,viewport.width*0.42)))
                         .transition(.move(edge:.trailing))
                 }
             }

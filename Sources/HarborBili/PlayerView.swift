@@ -88,6 +88,8 @@ struct PlayerPanel:View {
                         .transition(reduceMotion ? .identity:.opacity)
                 }
             }
+            .frame(width:geometry.size.width,height:geometry.size.height)
+            .clipped()
             .overlay(alignment:.bottomLeading) {
                 if let toast {
                     Text(toast)
@@ -220,35 +222,19 @@ struct PlayerPanel:View {
                     if controller.video?.roomID==nil {roundButton("前进 10 秒",symbol:"goforward.10",size:52) { controller.seek(controller.seconds+10) }}
                 }
                 Spacer()
-                VStack(alignment:.leading,spacing:14) {
-                    HStack(alignment:.bottom) {
-                        VStack(alignment:.leading,spacing:5) {
-                            Text(controller.video?.author ?? "").font(.caption).foregroundStyle(.white.opacity(0.7))
-                            MarqueeText(text:controller.video?.title ?? "",font:.system(size:immersive ? 23:17,weight:.semibold),height:immersive ? 30:22)
-                        }.frame(maxWidth:immersive ? 640:360,alignment:.leading)
-                            .shadow(color:.black.opacity(0.9),radius:3,y:1)
-                        Spacer(minLength:12)
-                        GlassEffectContainer(spacing:8) {
-                            HStack(spacing:8) {
-                                if controller.nextEpisode != nil {
-                                    iconButton("forward.end.fill",label:"播放下一集") { Task { await controller.playNextEpisode() } }
-                                }
-                                if controller.video?.roomID != nil {
-                                    iconButton(liveChatVisible ? "bubble.left.and.bubble.right.fill":"bubble.left.and.bubble.right",label:liveChatVisible ? "隐藏实时评论区":"显示实时评论区") { withAnimation(.snappy(duration:0.25)) { liveChatVisible.toggle() } }
-                                    iconButton("arrow.clockwise",label:"重新连接直播") { Task { await controller.retryLive() } }
-                                } else {
-                                    iconButton("text.bubble.fill",label:controller.commentsOpen ? "隐藏评论":"显示评论") { withAnimation(.snappy(duration:0.3)) { controller.commentsOpen.toggle() } }
-                                }
-                                popupButton("弹幕",symbol:"text.bubble",panel:.danmaku)
-                                if controller.video?.roomID==nil {
-                                    popupButton("选集",symbol:"list.bullet",panel:.episodes)
-                                    popupButton("字幕",symbol:"captions.bubble",panel:.subtitles)
-                                    popupButton("\(controller.rate.formatted())×",symbol:nil,panel:.speed)
-                                }
-                                popupButton(qualityButtonTitle,symbol:nil,panel:.quality,dolbyOnly:controller.selectedVideo?.label.contains("杜比视界") == true)
-                                popupButton("播放信息",symbol:"info.circle",panel:.info)
-                                fullScreenButton
-                            }
+                let compact = size.width < 1040
+                let tight = size.width < 520
+                VStack(alignment:.leading,spacing:12) {
+                    if compact {
+                        VStack(alignment:.leading,spacing:10) {
+                            titleBlock(compact:true)
+                            controlButtons(compact:true,tight:tight)
+                        }
+                    } else {
+                        HStack(alignment:.bottom) {
+                            titleBlock(compact:false)
+                            Spacer(minLength:12)
+                            controlButtons(compact:false,tight:false)
                         }
                     }
                     if controller.video?.roomID != nil {
@@ -273,6 +259,47 @@ struct PlayerPanel:View {
             .padding(immersive ? 24:18)
         }
     }
+    @ViewBuilder
+    private func titleBlock(compact:Bool)->some View {
+        VStack(alignment:.leading,spacing:4) {
+            Text(controller.video?.author ?? "").font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            if compact {
+                Text(controller.video?.title ?? "")
+                    .font(.system(size:15,weight:.semibold)).lineLimit(1).truncationMode(.middle)
+            } else {
+                MarqueeText(text:controller.video?.title ?? "",font:.system(size:immersive ? 23:17,weight:.semibold),height:immersive ? 30:22)
+            }
+        }
+        .frame(maxWidth:compact ? .infinity:(immersive ? 640:360),alignment:.leading)
+        .shadow(color:.black.opacity(0.9),radius:3,y:1)
+    }
+
+    @ViewBuilder
+    private func controlButtons(compact:Bool,tight:Bool)->some View {
+        GlassEffectContainer(spacing:6) {
+            HStack(spacing:compact ? 6:8) {
+                if !compact,controller.nextEpisode != nil {
+                    iconButton("forward.end.fill",label:"播放下一集") { Task { await controller.playNextEpisode() } }
+                }
+                if controller.video?.roomID != nil {
+                    iconButton(liveChatVisible ? "bubble.left.and.bubble.right.fill":"bubble.left.and.bubble.right",label:liveChatVisible ? "隐藏实时评论区":"显示实时评论区") { withAnimation(.snappy(duration:0.25)) { liveChatVisible.toggle() } }
+                    iconButton("arrow.clockwise",label:"重新连接直播") { Task { await controller.retryLive() } }
+                } else {
+                    iconButton("text.bubble.fill",label:controller.commentsOpen ? "隐藏评论":"显示评论") { withAnimation(.snappy(duration:0.3)) { controller.commentsOpen.toggle() } }
+                }
+                if !tight { popupButton("弹幕",symbol:"text.bubble",panel:.danmaku) }
+                if controller.video?.roomID==nil {
+                    popupButton("选集",symbol:"list.bullet",panel:.episodes)
+                    if !compact, !tight { popupButton("字幕",symbol:"captions.bubble",panel:.subtitles) }
+                    popupButton("\(controller.rate.formatted())×",symbol:nil,panel:.speed)
+                }
+                popupButton(qualityButtonTitle,symbol:nil,panel:.quality,dolbyOnly:controller.selectedVideo?.label.contains("杜比视界") == true)
+                if !compact { popupButton("播放信息",symbol:"info.circle",panel:.info) }
+                fullScreenButton
+            }
+        }
+    }
+
     private var backButton:some View {
         roundButton(immersive ? "返回视频详情":"停止播放并返回详情",symbol:"chevron.left",size:36,action:onBack)
     }
