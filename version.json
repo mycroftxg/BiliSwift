@@ -1,8 +1,8 @@
 {
-  "version": "0.6.0",
-  "build": 205,
-  "dmg": "BiliSwift-0.6.0.dmg",
-  "sha256": "4870a471c25e7cbf20217f9d1f511ab9808c1cd51b217cad18628c090bb532b6",
-  "notes": "后台播放与 Apple Music 风格迷你播放条、macOS 正在播放/媒体键、选集菜单重做、评论点赞回复、应用内自动更新、性能与动画全面优化。",
-  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.6.0"
+  "version": "0.6.1",
+  "build": 206,
+  "dmg": "BiliSwift-0.6.1.dmg",
+  "sha256": "3aca02db5f6e9892f88435745ad9492cb7a6040bffa470e079c0d41489154a9b",
+  "notes": "修复退出全屏后的画面放大/遮挡；评论支持图片与 B 站基础表情。",
+  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.6.1"
 }
