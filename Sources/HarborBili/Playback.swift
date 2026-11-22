@@ -501,16 +501,31 @@ struct VideoSurface:NSViewRepresentable {
     var onWindow:(NSWindow?)->Void = { _ in }
     final class Surface:NSView {
         var onWindow:(NSWindow?)->Void = { _ in }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow();onWindow(window) }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow();onWindow(window);syncLayer() }
         let videoLayer=AVPlayerLayer()
-        override init(frame:NSRect) { super.init(frame:frame);wantsLayer=true;layer=videoLayer;videoLayer.videoGravity = .resizeAspect;videoLayer.backgroundColor=NSColor.black.cgColor }
+        override init(frame:NSRect) {
+            super.init(frame:frame)
+            wantsLayer=true
+            videoLayer.videoGravity = .resizeAspect
+            videoLayer.backgroundColor=NSColor.black.cgColor
+        }
         required init?(coder:NSCoder) { nil }
-        override func layout() {
-            super.layout()
+        override func makeBackingLayer()->CALayer {
+            let backing=CALayer()
+            backing.backgroundColor=NSColor.black.cgColor
+            backing.addSublayer(videoLayer)
+            return backing
+        }
+        override func layout() { super.layout();syncLayer() }
+        override func setFrameSize(_ newSize:NSSize) { super.setFrameSize(newSize);syncLayer() }
+        override func setBoundsSize(_ newSize:NSSize) { super.setBoundsSize(newSize);syncLayer() }
+        private func syncLayer() {
+            guard let backing=layer else { return }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            videoLayer.frame=bounds
+            videoLayer.frame=backing.bounds
             CATransaction.commit()
+            LayoutLog.write("surface bounds=\(bounds) video=\(videoLayer.frame) window=\(window?.frame ?? .zero)")
         }
     }
     func makeNSView(context:Context)->Surface { let view=Surface(frame:.zero);view.onWindow=onWindow;view.videoLayer.player=player;return view }

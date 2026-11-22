@@ -23,7 +23,6 @@ struct ContentView:View {
     @State private var nearBottom=false
     @State private var viewport=CGSize(width:1000,height:800)
     @State private var sidebarWidth:CGFloat=220
-    @State private var playerLayoutID=UUID()
     private var route:Destination { Destination(rawValue:selection) ?? .channels }
     private var channel:BiliChannel? { selection.hasPrefix("channel.") ? BiliChannel.find(String(selection.dropFirst(8))):nil }
     private var nativeCatalog:Bool { route == .home || route == .live || channel != nil }
@@ -150,7 +149,6 @@ struct ContentView:View {
                 }
             }
             .background(.black).ignoresSafeArea()
-            .id(playerLayoutID)
             .transition(.playerCollapse)
             .animation(.spring(response:0.5,dampingFraction:0.9),value:playback.commentsOpen)
         }
@@ -179,8 +177,18 @@ struct ContentView:View {
     }
     /// 全屏切换后强制重建播放器布局，避免 AVPlayerLayer/侧栏沿用旧的全屏尺寸。
     private func presentLayoutRefresh() {
+        LayoutLog.write("refresh before fullScreen=\(presentation.fullScreen) window=\(presentation.window?.frame ?? .zero)")
         presentation.refresh()
-        playerLayoutID=UUID()
+        guard let window=presentation.window else { return }
+        // 全屏进出时窗口几何在动画结束后才稳定，分几个时间点强制宿主视图重新布局。
+        for delay in [0.0,0.12,0.35,0.7] {
+            DispatchQueue.main.asyncAfter(deadline:.now()+delay) {
+                window.contentView?.needsLayout=true
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                LayoutLog.write("refresh after fullScreen=\(presentation.fullScreen) window=\(window.frame) content=\(window.contentView?.frame ?? .zero)")
+            }
+        }
     }
     /// 只存在于官方网页的入口：直接交给系统默认浏览器，App 内不保留网页窗口。
     private func externalWebURL(_ raw:String)->URL? {

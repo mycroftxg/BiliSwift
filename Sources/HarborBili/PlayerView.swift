@@ -37,6 +37,8 @@ struct PlayerPanel:View {
             ZStack {
                 Color.black
                 VideoSurface(player:controller.player,onWindow:{presentation.attach($0)})
+                    .frame(width:geometry.size.width,height:geometry.size.height)
+                    .clipped()
                 if controller.showDanmaku {
                     DanmakuOverlay(items:controller.danmaku,seconds:controller.seconds,playing:controller.playing,rate:Double(controller.rate),reduceMotion:reduceMotion,lowPower:preferences.values.lowPowerMode,fontSize:preferences.values.danmakuSize,density:preferences.values.danmakuDensity,speed:preferences.values.danmakuSpeed)
                         .id(controller.cid).opacity(preferences.values.danmakuOpacity).allowsHitTesting(false).accessibilityHidden(true)
