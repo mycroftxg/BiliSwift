@@ -525,7 +525,6 @@ struct VideoSurface:NSViewRepresentable {
             CATransaction.setDisableActions(true)
             videoLayer.frame=backing.bounds
             CATransaction.commit()
-            LayoutLog.write("surface bounds=\(bounds) video=\(videoLayer.frame) window=\(window?.frame ?? .zero)")
         }
     }
     func makeNSView(context:Context)->Surface { let view=Surface(frame:.zero);view.onWindow=onWindow;view.videoLayer.player=player;return view }

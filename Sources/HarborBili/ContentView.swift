@@ -177,7 +177,6 @@ struct ContentView:View {
     }
     /// 全屏切换后强制重建播放器布局，避免 AVPlayerLayer/侧栏沿用旧的全屏尺寸。
     private func presentLayoutRefresh() {
-        LayoutLog.write("refresh before fullScreen=\(presentation.fullScreen) window=\(presentation.window?.frame ?? .zero)")
         presentation.refresh()
         guard let window=presentation.window else { return }
         // 全屏进出时窗口几何在动画结束后才稳定，分几个时间点强制宿主视图重新布局。
@@ -186,7 +185,6 @@ struct ContentView:View {
                 window.contentView?.needsLayout=true
                 window.contentView?.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
-                LayoutLog.write("refresh after fullScreen=\(presentation.fullScreen) window=\(window.frame) content=\(window.contentView?.frame ?? .zero)")
             }
         }
     }
