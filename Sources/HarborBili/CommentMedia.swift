@@ -79,7 +79,7 @@ struct CommentTextView:View {
         var result=Text("")
         for token in Self.tokens(text) {
             if emotes[token] != nil,let image=images[token] {
-                result = result + Text(Image(nsImage:image)).baselineOffset(1)
+                result = result + Text(Image(nsImage:image)).baselineOffset(-2)
             } else {
                 result = result + Text(token)
             }
@@ -97,8 +97,8 @@ struct CommentTextView:View {
     }
 
     private static func inlineImage(_ image:NSImage)->NSImage {
-        let height:CGFloat=18
-        let width=max(12,min(36,image.size.width*height/max(1,image.size.height)))
+        let height:CGFloat=16
+        let width=max(10,min(32,image.size.width*height/max(1,image.size.height)))
         let target=NSImage(size:NSSize(width:width,height:height))
         target.lockFocus()
         image.draw(in:NSRect(x:0,y:0,width:width,height:height))
