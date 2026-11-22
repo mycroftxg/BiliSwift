@@ -224,9 +224,10 @@ struct PlayerPanel:View {
                 Spacer()
                 let compact = size.width < 1320
                 let tight = size.width < 720
+                let titleSize = min(23,max(14,size.width/60))
                 VStack(alignment:.leading,spacing:12) {
                     HStack(alignment:.bottom,spacing:10) {
-                        titleBlock(compact:compact,maxWidth:compact ? max(150,size.width*0.38):min(immersive ? 640:360,size.width*0.38))
+                        titleBlock(compact:compact,maxWidth:compact ? max(150,size.width*0.38):min(immersive ? 640:360,size.width*0.38),titleSize:titleSize)
                         Spacer(minLength:8)
                         controlButtons(compact:compact,tight:tight)
                             .fixedSize(horizontal:true,vertical:false)
@@ -254,22 +255,15 @@ struct PlayerPanel:View {
         }
     }
     @ViewBuilder
-    private func titleBlock(compact:Bool,maxWidth:CGFloat)->some View {
-        Group {
-            if compact {
-                HStack(spacing:8) {
-                    Text(controller.video?.author ?? "").font(.system(size:10,weight:.medium)).foregroundStyle(.white.opacity(0.6))
-                        .lineLimit(1).truncationMode(.tail).frame(maxWidth:120,alignment:.leading)
-                    MarqueeText(text:controller.video?.title ?? "",font:.system(size:14,weight:.semibold),height:20,fadeEdges:true)
-                        .frame(maxWidth:.infinity,alignment:.leading)
-                        .layoutPriority(1)
-                }
-            } else {
-                VStack(alignment:.leading,spacing:4) {
-                    Text(controller.video?.author ?? "").font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
-                    MarqueeText(text:controller.video?.title ?? "",font:.system(size:17,weight:.semibold),height:24,fadeEdges:true)
-                }
-            }
+    private func titleBlock(compact:Bool,maxWidth:CGFloat,titleSize:CGFloat)->some View {
+        VStack(alignment:.leading,spacing:3) {
+            Text(controller.video?.author ?? "")
+                .font(.system(size:max(10,titleSize*0.55),weight:.medium))
+                .foregroundStyle(.white.opacity(0.65))
+                .lineLimit(1).truncationMode(.tail)
+            MarqueeText(text:controller.video?.title ?? "",
+                        font:.system(size:titleSize,weight:.semibold),
+                        height:titleSize*1.4,fadeEdges:true)
         }
         .frame(width:maxWidth,alignment:.leading)
         .shadow(color:.black.opacity(0.9),radius:3,y:1)
@@ -940,7 +934,8 @@ struct MarqueeText:View {
                 if over { Text(text).font(font).fixedSize() }
             }
             .offset(x:animate ? -(textWidth+28):0)
-            .animation(over ? .linear(duration:max(8,Double(textWidth)/45)).repeatForever(autoreverses:false):.default,value:animate)
+            .frame(width:geo.size.width,alignment:.leading)
+            .clipped()
             .mask(
                 LinearGradient(stops:(over && fadeEdges) ? [
                     .init(color:.clear,location:0),
@@ -952,14 +947,13 @@ struct MarqueeText:View {
                     .init(color:.black,location:1)
                 ],startPoint:.leading,endPoint:.trailing)
             )
+            .animation(over ? .linear(duration:max(8,Double(textWidth)/45)).repeatForever(autoreverses:false):.default,value:animate)
             .onPreferenceChange(MarqueeWidthKey.self) { textWidth=$0 }
             .onAppear { animate=over }
             .onChange(of:over) { _,value in animate=value }
             .onChange(of:text) { _,_ in animate=false;DispatchQueue.main.async { animate=over } }
         }
         .frame(height:height)
-        .clipped()
-
     }
 }
 
