@@ -226,11 +226,11 @@ struct PlayerPanel:View {
                 let tight = size.width < 720
                 let titleSize = min(23,max(14,size.width/60))
                 VStack(alignment:.leading,spacing:12) {
-                    HStack(alignment:.bottom,spacing:10) {
-                        titleBlock(compact:compact,maxWidth:compact ? max(150,size.width*0.38):min(immersive ? 640:360,size.width*0.38),titleSize:titleSize)
-                        Spacer(minLength:8)
+                    HStack(alignment:.bottom,spacing:12) {
+                        titleBlock(compact:compact,titleSize:titleSize)
                         controlButtons(compact:compact,tight:tight)
                             .fixedSize(horizontal:true,vertical:false)
+                            .layoutPriority(1)
                     }
                     if controller.video?.roomID != nil {
                         HStack(spacing:10) {
@@ -255,7 +255,7 @@ struct PlayerPanel:View {
         }
     }
     @ViewBuilder
-    private func titleBlock(compact:Bool,maxWidth:CGFloat,titleSize:CGFloat)->some View {
+    private func titleBlock(compact:Bool,titleSize:CGFloat)->some View {
         VStack(alignment:.leading,spacing:3) {
             Text(controller.video?.author ?? "")
                 .font(.system(size:max(10,titleSize*0.55),weight:.medium))
@@ -265,7 +265,7 @@ struct PlayerPanel:View {
                         font:.system(size:titleSize,weight:.semibold),
                         height:titleSize*1.4,fadeEdges:true)
         }
-        .frame(width:maxWidth,alignment:.leading)
+        .frame(maxWidth:.infinity,alignment:.leading)
         .shadow(color:.black.opacity(0.9),radius:3,y:1)
     }
 
