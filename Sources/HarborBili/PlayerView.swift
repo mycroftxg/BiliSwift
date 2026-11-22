@@ -637,7 +637,7 @@ struct PlayerCommentRow:View {
                     .frame(width:34,height:34).clipShape(.circle).clipped()
                 VStack(alignment:.leading,spacing:5) {
                     Text(uname).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.65))
-                    Text(comment["content"]["message"].string).font(.callout).foregroundStyle(.white).fixedSize(horizontal:false,vertical:true)
+                    CommentTextView(text:comment["content"]["message"].string,emotes:comment["content"].commentEmoteURLs)
                     if !comment["content"].commentPictureURLs.isEmpty {
                         CommentPictures(urls:comment["content"].commentPictureURLs)
                     }
@@ -752,7 +752,7 @@ struct PlayerReplyRow:View {
                 .frame(width:24,height:24).clipShape(.circle).clipped()
             VStack(alignment:.leading,spacing:3) {
                 Text(uname).font(.caption2.weight(.semibold)).foregroundStyle(.white.opacity(0.55))
-                Text(reply["content"]["message"].string).font(.caption).foregroundStyle(.white).fixedSize(horizontal:false,vertical:true)
+                CommentTextView(text:reply["content"]["message"].string,emotes:reply["content"].commentEmoteURLs,font:.caption)
                 if !reply["content"].commentPictureURLs.isEmpty {
                     CommentPictures(urls:reply["content"].commentPictureURLs)
                 }
