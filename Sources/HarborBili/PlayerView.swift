@@ -638,6 +638,9 @@ struct PlayerCommentRow:View {
                 VStack(alignment:.leading,spacing:5) {
                     Text(uname).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.65))
                     Text(comment["content"]["message"].string).font(.callout).foregroundStyle(.white).fixedSize(horizontal:false,vertical:true)
+                    if !comment["content"].commentPictureURLs.isEmpty {
+                        CommentPictures(urls:comment["content"].commentPictureURLs)
+                    }
                     HStack(spacing:14) {
                         Button { Task { await toggleLike() } } label:{
                             Label("\(likeCount)",systemImage:liked ? "hand.thumbsup.fill":"hand.thumbsup")
@@ -750,6 +753,9 @@ struct PlayerReplyRow:View {
             VStack(alignment:.leading,spacing:3) {
                 Text(uname).font(.caption2.weight(.semibold)).foregroundStyle(.white.opacity(0.55))
                 Text(reply["content"]["message"].string).font(.caption).foregroundStyle(.white).fixedSize(horizontal:false,vertical:true)
+                if !reply["content"].commentPictureURLs.isEmpty {
+                    CommentPictures(urls:reply["content"].commentPictureURLs)
+                }
                 HStack(spacing:12) {
                     Button { Task { await toggleLike() } } label:{
                         Label("\(likeCount)",systemImage:liked ? "hand.thumbsup.fill":"hand.thumbsup")

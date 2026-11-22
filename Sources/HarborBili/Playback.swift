@@ -505,6 +505,13 @@ struct VideoSurface:NSViewRepresentable {
         let videoLayer=AVPlayerLayer()
         override init(frame:NSRect) { super.init(frame:frame);wantsLayer=true;layer=videoLayer;videoLayer.videoGravity = .resizeAspect;videoLayer.backgroundColor=NSColor.black.cgColor }
         required init?(coder:NSCoder) { nil }
+        override func layout() {
+            super.layout()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            videoLayer.frame=bounds
+            CATransaction.commit()
+        }
     }
     func makeNSView(context:Context)->Surface { let view=Surface(frame:.zero);view.onWindow=onWindow;view.videoLayer.player=player;return view }
     func updateNSView(_ view:Surface,context:Context) { view.videoLayer.player=player;view.onWindow=onWindow;if view.window != nil { onWindow(view.window) } }
