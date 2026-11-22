@@ -223,20 +223,13 @@ struct PlayerPanel:View {
                 }
                 Spacer()
                 let compact = size.width < 1320
-                let tight = size.width < 520
+                let tight = size.width < 720
                 VStack(alignment:.leading,spacing:12) {
-                    if compact {
-                        VStack(alignment:.leading,spacing:10) {
-                            titleBlock(compact:true)
-                            controlButtons(compact:true,tight:tight)
-                                .frame(maxWidth:.infinity,alignment:.leading)
-                        }
-                    } else {
-                        HStack(alignment:.bottom) {
-                            titleBlock(compact:false)
-                            Spacer(minLength:12)
-                            controlButtons(compact:false,tight:false)
-                        }
+                    HStack(alignment:.bottom,spacing:10) {
+                        titleBlock(compact:compact,maxWidth:compact ? max(150,size.width*0.38):min(immersive ? 640:360,size.width*0.38))
+                        Spacer(minLength:8)
+                        controlButtons(compact:compact,tight:tight)
+                            .fixedSize(horizontal:true,vertical:false)
                     }
                     if controller.video?.roomID != nil {
                         HStack(spacing:10) {
@@ -261,24 +254,24 @@ struct PlayerPanel:View {
         }
     }
     @ViewBuilder
-    private func titleBlock(compact:Bool)->some View {
+    private func titleBlock(compact:Bool,maxWidth:CGFloat)->some View {
         Group {
             if compact {
                 HStack(spacing:8) {
                     Text(controller.video?.author ?? "").font(.system(size:10,weight:.medium)).foregroundStyle(.white.opacity(0.6))
-                        .lineLimit(1).truncationMode(.tail).frame(maxWidth:150,alignment:.leading)
-                    edgeFade(MarqueeText(text:controller.video?.title ?? "",font:.system(size:14,weight:.semibold),height:20))
+                        .lineLimit(1).truncationMode(.tail).frame(maxWidth:120,alignment:.leading)
+                    MarqueeText(text:controller.video?.title ?? "",font:.system(size:14,weight:.semibold),height:20,fadeEdges:true)
                         .frame(maxWidth:.infinity,alignment:.leading)
                         .layoutPriority(1)
                 }
             } else {
                 VStack(alignment:.leading,spacing:4) {
                     Text(controller.video?.author ?? "").font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
-                    edgeFade(MarqueeText(text:controller.video?.title ?? "",font:.system(size:immersive ? 23:17,weight:.semibold),height:immersive ? 30:22))
+                    MarqueeText(text:controller.video?.title ?? "",font:.system(size:17,weight:.semibold),height:24,fadeEdges:true)
                 }
             }
         }
-        .frame(maxWidth:compact ? .infinity:(immersive ? 640:360),alignment:.leading)
+        .frame(width:maxWidth,alignment:.leading)
         .shadow(color:.black.opacity(0.9),radius:3,y:1)
     }
 
@@ -297,7 +290,6 @@ struct PlayerPanel:View {
                     popupButton("选集",symbol:"list.bullet",panel:.episodes,compact:compact)
                     if !compact, !tight { popupButton("字幕",symbol:"captions.bubble",panel:.subtitles,compact:compact) }
                 }
-                Spacer(minLength:compact ? 6:10)
                 if controller.video?.roomID==nil {
                     popupButton("\(controller.rate.formatted())×",symbol:nil,panel:.speed,compact:compact)
                 }
@@ -312,16 +304,6 @@ struct PlayerPanel:View {
         roundButton(immersive ? "返回视频详情":"停止播放并返回详情",symbol:"chevron.left",size:36,action:onBack)
     }
     private enum ControlMetrics { static let height:CGFloat=32;static let width:CGFloat=60;static let icon:CGFloat=13;static let font:CGFloat=12 }
-    private func edgeFade<V:View>(_ view:V)->some View {
-        view.mask(
-            LinearGradient(stops:[
-                .init(color:.clear,location:0),
-                .init(color:.black,location:0.06),
-                .init(color:.black,location:0.94),
-                .init(color:.clear,location:1)
-            ],startPoint:.leading,endPoint:.trailing)
-        )
-    }
     private func metricWidth(_ compact:Bool)->CGFloat { compact ? 44:ControlMetrics.width }
     private func metricHeight(_ compact:Bool)->CGFloat { compact ? 30:ControlMetrics.height }
     private func iconButton(_ symbol:String,label:String,compact:Bool=false,action:@escaping()->Void)->some View {
@@ -946,6 +928,7 @@ struct MarqueeText:View {
     let text:String
     var font:Font = .body
     var height:CGFloat=22
+    var fadeEdges:Bool=false
     @State private var textWidth:CGFloat=0
     @State private var animate=false
     var body:some View {
@@ -958,6 +941,17 @@ struct MarqueeText:View {
             }
             .offset(x:animate ? -(textWidth+28):0)
             .animation(over ? .linear(duration:max(8,Double(textWidth)/45)).repeatForever(autoreverses:false):.default,value:animate)
+            .mask(
+                LinearGradient(stops:(over && fadeEdges) ? [
+                    .init(color:.clear,location:0),
+                    .init(color:.black,location:0.06),
+                    .init(color:.black,location:0.94),
+                    .init(color:.clear,location:1)
+                ] : [
+                    .init(color:.black,location:0),
+                    .init(color:.black,location:1)
+                ],startPoint:.leading,endPoint:.trailing)
+            )
             .onPreferenceChange(MarqueeWidthKey.self) { textWidth=$0 }
             .onAppear { animate=over }
             .onChange(of:over) { _,value in animate=value }
