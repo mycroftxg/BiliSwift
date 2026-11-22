@@ -266,12 +266,12 @@ struct PlayerPanel:View {
             if compact {
                 HStack(spacing:8) {
                     Text(controller.video?.author ?? "").font(.system(size:10,weight:.medium)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                    Text(controller.video?.title ?? "").font(.system(size:14,weight:.semibold)).lineLimit(1).truncationMode(.tail)
+                    edgeFade(Text(controller.video?.title ?? "").font(.system(size:14,weight:.semibold)).lineLimit(1))
                 }
             } else {
                 VStack(alignment:.leading,spacing:4) {
                     Text(controller.video?.author ?? "").font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
-                    MarqueeText(text:controller.video?.title ?? "",font:.system(size:immersive ? 23:17,weight:.semibold),height:immersive ? 30:22)
+                    edgeFade(MarqueeText(text:controller.video?.title ?? "",font:.system(size:immersive ? 23:17,weight:.semibold),height:immersive ? 30:22))
                 }
             }
         }
@@ -283,9 +283,6 @@ struct PlayerPanel:View {
     private func controlButtons(compact:Bool,tight:Bool)->some View {
         GlassEffectContainer(spacing:6) {
             HStack(spacing:compact ? 5:8) {
-                if !compact,controller.nextEpisode != nil {
-                    iconButton("forward.end.fill",label:"播放下一集") { Task { await controller.playNextEpisode() } }
-                }
                 if controller.video?.roomID != nil {
                     iconButton(liveChatVisible ? "bubble.left.and.bubble.right.fill":"bubble.left.and.bubble.right",label:liveChatVisible ? "隐藏实时评论区":"显示实时评论区",compact:compact) { withAnimation(.snappy(duration:0.25)) { liveChatVisible.toggle() } }
                     iconButton("arrow.clockwise",label:"重新连接直播",compact:compact) { Task { await controller.retryLive() } }
@@ -312,6 +309,16 @@ struct PlayerPanel:View {
         roundButton(immersive ? "返回视频详情":"停止播放并返回详情",symbol:"chevron.left",size:36,action:onBack)
     }
     private enum ControlMetrics { static let height:CGFloat=32;static let width:CGFloat=60;static let icon:CGFloat=13;static let font:CGFloat=12 }
+    private func edgeFade<V:View>(_ view:V)->some View {
+        view.mask(
+            LinearGradient(stops:[
+                .init(color:.clear,location:0),
+                .init(color:.black,location:0.06),
+                .init(color:.black,location:0.94),
+                .init(color:.clear,location:1)
+            ],startPoint:.leading,endPoint:.trailing)
+        )
+    }
     private func metricWidth(_ compact:Bool)->CGFloat { compact ? 44:ControlMetrics.width }
     private func metricHeight(_ compact:Bool)->CGFloat { compact ? 30:ControlMetrics.height }
     private func iconButton(_ symbol:String,label:String,compact:Bool=false,action:@escaping()->Void)->some View {
