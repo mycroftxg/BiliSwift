@@ -246,3 +246,25 @@ import HarborCore
     #expect(LiveChat.emotes(in: metadata, text: "普通文本").isEmpty)
     #expect(LiveChat.emotes(in: .object(["url": .string("https://example.com/image.png")]), text: "[大笑]").isEmpty)
 }
+
+@Test @MainActor func tmdbSeasonTitlePreservesMovieAndSeriesNames() {
+    #expect(TMDBPosters.seriesTitle("时光代理人 第三季") == "时光代理人")
+    #expect(TMDBPosters.seriesTitle("Arcane Season 2") == "Arcane")
+    #expect(TMDBPosters.seriesTitle("伍六七之记忆碎片") == "伍六七之记忆碎片")
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["BILISWIFT_TMDB_TEST_TOKEN"] != nil))
+@MainActor func tmdbLiveArtworkPipelineLoadsMovieAndSeriesBackdrops() async throws {
+    let token = try #require(ProcessInfo.processInfo.environment["BILISWIFT_TMDB_TEST_TOKEN"])
+    try await TMDBPosters.validate(token: token)
+    for (title, expected, kind) in [("Interstellar", 157336, TMDBPosters.Kind.movie),
+                                    ("Arcane Season 2", 94605, TMDBPosters.Kind.tv)] {
+        let video = Video(season: .object(["title": .string(title)]))
+        let artwork = await TMDBPosters.shared.artwork(for: video, token: token, kind: kind)
+        #expect(artwork.tmdbID == expected, "Unexpected match for \(title)")
+        #expect(artwork.poster != nil)
+        #expect(!artwork.backdropCandidates.isEmpty)
+        let image = await SeasonArtwork.load(preferred: artwork.backdropCandidates, fallback: [], width: 640, portrait: false)
+        #expect(image != nil)
+    }
+}

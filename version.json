@@ -1,8 +1,8 @@
 {
-  "version": "0.7.3",
-  "build": 211,
-  "dmg": "BiliSwift-0.7.3.dmg",
-  "sha256": "9305823e5b75a93456a3ce732b8439112c4c2dc167dc996bdbd95aa2f2e66a89",
-  "notes": "启用 TMDB 或刷新影视时重新匹配封面。PGC 轮播优先选择 TMDB 横幅，设置新增清除图片和海报缓存。",
-  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.7.3"
+  "version": "0.7.4",
+  "build": 212,
+  "dmg": "BiliSwift-0.7.4.dmg",
+  "sha256": "eedd61d1d7aee626c828e156f80d1f7bd8a9af58460199c9e7bed5490d828ca8",
+  "notes": "改进 TMDB 别名和季号匹配，补查图库横幅并尝试备选图片。",
+  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.7.4"
 }

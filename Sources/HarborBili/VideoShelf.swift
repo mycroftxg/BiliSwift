@@ -47,11 +47,11 @@ struct HeroCarousel:View {
     @State private var switching=false
     @State private var preferredBackdrops: [String: NSImage] = [:]
     private var candidateKey: String {
-        videos.prefix(12).map(\.id).joined(separator: ",") + "|" + preferences.values.activeTMDBToken
+        videos.prefix(20).map(\.id).joined(separator: ",") + "|" + preferences.values.activeTMDBToken
             + "|" + preferences.artworkRevision.uuidString + "|" + String(preferences.values.lowPowerMode)
     }
     private var slides: [Video] {
-        let candidates = videos.prefix(12)
+        let candidates = videos.prefix(20)
         guard !preferredBackdrops.isEmpty else { return Array(candidates.prefix(5)) }
         let ranked = candidates.filter { preferredBackdrops[$0.id] != nil }
             + candidates.filter { preferredBackdrops[$0.id] == nil }
@@ -126,20 +126,20 @@ struct HeroCarousel:View {
             if !preferredBackdrops.isEmpty { updateRankedBackdrops([:]) }
             return
         }
-        let limit = preferences.values.lowPowerMode ? 5 : 12
+        let limit = preferences.values.lowPowerMode ? 5 : 20
         let candidates = Array(videos.prefix(limit))
         var result: [String: NSImage] = [:]
         for start in stride(from: 0, to: candidates.count, by: 4) {
             guard !Task.isCancelled else { return }
             let batch = candidates[start..<min(start + 4, candidates.count)]
-            let matched = await withTaskGroup(of: (String, String?).self) { group in
+            let matched = await withTaskGroup(of: (String, [String]).self) { group in
                 for video in batch {
                     group.addTask {
-                        let artwork = await TMDBPosters.shared.artwork(title: video.title, token: token, kind: seasonKind)
-                        return (video.id, artwork.backdrop)
+                        let artwork = await TMDBPosters.shared.artwork(for: video, token: token, kind: seasonKind)
+                        return (video.id, artwork.backdropCandidates)
                     }
                 }
-                var urls: [String: String] = [:]
+                var urls: [String: [String]] = [:]
                 for await (id, url) in group { urls[id] = url }
                 return urls
             }

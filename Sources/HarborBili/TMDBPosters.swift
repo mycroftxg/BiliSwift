@@ -15,12 +15,16 @@ import CryptoKit
     struct Artwork: Codable, Sendable {
         var poster:String?
         var backdrop:String?
+        var alternatives: [String]? = nil
+        var tmdbID: Int? = nil
+        var backdropCandidates: [String] { [backdrop].compactMap { $0 } + (alternatives ?? []) }
+
     }
     private struct Cached: Codable {
         let artwork: Artwork
         let expires: Date
     }
-    private static let cacheURL = URL.cachesDirectory.appending(path: "BiliSwift/tmdb-artwork.json")
+    private static let cacheURL = URL.cachesDirectory.appending(path: "BiliSwift/tmdb-artwork-v2.json")
     private var cache: [String: Cached] = {
         guard let data = try? Data(contentsOf: cacheURL),
               let entries = try? JSONDecoder().decode([String: Cached].self, from: data) else { return [:] }
@@ -54,26 +58,40 @@ import CryptoKit
         return year
     }
 
-    func poster(title:String,token:String,kind:Kind,year:Int?=nil) async -> String? {
-        await artwork(title:title,token:token,kind:kind,year:year).poster
+    func artwork(for video: Video, detail: JSON = .null, token: String, kind: Kind) async -> Artwork {
+        let titles = [detail["title"].string, video.title, detail["origin_name"].string,
+                      detail["jp_title"].string, detail["original_title"].string]
+        let year = Self.year(from: detail["publish"]["pub_time"].string)
+            ?? Self.year(from: video.author)
+        let result = await artwork(titles: titles, token: token, kind: kind, year: year, seasonID: video.seasonID.flatMap { $0 > 0 ? $0 : nil })
+        guard result.backdrop == nil, !token.isEmpty, !Task.isCancelled,
+              case .null = detail, let id = video.seasonID, id > 0,
+              let season = try? await BiliAPI.shared.season(id) else { return result }
+        return await artwork(for: video, detail: season, token: token, kind: kind)
     }
 
-    func artwork(title:String,token:String,kind:Kind,year:Int?=nil) async -> Artwork {
+    private func artwork(titles: [String], token: String, kind: Kind, year: Int?, seasonID: Int?) async -> Artwork {
         let value=token.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !value.isEmpty else { return Artwork() }
-        let trimmed=title.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return Artwork() }
+        var seen = Set<String>()
+        let queries = titles.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+        guard let title = queries.first else { return Artwork() }
         let fingerprint = SHA256.hash(data: Data(value.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
-        let key = "\(fingerprint)|\(kind.rawValue)|\(trimmed)|\(year ?? 0)"
-        if let hit = cache[key], hit.expires > .now { return hit.artwork }
-        if let task=inflight[key] { return await task.value }
+        let key = "\(fingerprint)|\(kind.rawValue)|\(seasonID.map(String.init) ?? title)"
+        if let hit = cache[key], hit.expires > .now, hit.artwork.backdrop != nil { return hit.artwork }
+        let queryKey = key + "|" + queries.joined(separator: "|") + "|\(year ?? 0)"
+        if let hit = cache[queryKey], hit.expires > .now { return hit.artwork }
+        if let task = inflight[queryKey] { return await task.value }
         let ticket = generation
         let task=Task<Artwork,Never> {
-            let result = await Self.search(title: trimmed, token: value, kind: kind, year: year)
+            let result = await Self.search(titles: queries, token: value, kind: kind, year: year)
             guard self.generation == ticket, !Task.isCancelled else { return Artwork() }
             if let result {
                 let found = result.poster != nil || result.backdrop != nil
-                self.cache[key] = Cached(artwork: result, expires: Date().addingTimeInterval(found ? 604800 : 1800))
+                let entry = Cached(artwork: result, expires: Date().addingTimeInterval(result.backdrop != nil ? 604800 : 1800))
+                self.cache[queryKey] = entry
+                if result.backdrop != nil { self.cache[key] = entry }
                 if self.cache.count > 600 {
                     self.cache = Dictionary(uniqueKeysWithValues: self.cache.sorted { $0.value.expires > $1.value.expires }.prefix(500).map { ($0.key, $0.value) })
                 }
@@ -81,9 +99,9 @@ import CryptoKit
             }
             return result ?? self.cache[key]?.artwork ?? Artwork()
         }
-        inflight[key]=task
+        inflight[queryKey]=task
         let result=await task.value
-        if generation == ticket { inflight[key]=nil }
+        if generation == ticket { inflight[queryKey]=nil }
         return result
     }
 
@@ -116,34 +134,101 @@ import CryptoKit
     }
 
     func backdrop(for video: Video, detail: JSON, token: String, width: Int = 1920) async -> NSImage? {
-        let title = detail["title"].string.isEmpty ? video.title : detail["title"].string
         let kind = Kind(seasonType: detail["type"].int)
-        let year = Self.year(from: detail["publish"]["pub_time"].string)
-        let artwork = await artwork(title: title, token: token, kind: kind, year: year)
+        let artwork = await artwork(for: video, detail: detail, token: token, kind: kind)
         let fallback = [detail["bkg_cover"].string]
             + detail["episodes"].array.prefix(3).map { $0["cover"].string }
-        return await SeasonArtwork.load(preferred: artwork.backdrop, fallback: fallback, width: width, portrait: false)
+        return await SeasonArtwork.load(preferred: artwork.backdropCandidates, fallback: fallback, width: width, portrait: false)
     }
 
-    private static func search(title:String,token:String,kind:Kind,year:Int?) async -> Artwork? {
+    private static func request(_ path: String, token: String, query: [URLQueryItem] = []) async throws -> JSON {
+        var components = URLComponents(string: "https://api.themoviedb.org/3/" + path)!
+        if !query.isEmpty { components.queryItems = query }
+        var request = URLRequest(url: components.url!, timeoutInterval: 6)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw BiliError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        return try JSONDecoder().decode(JSON.self, from: data)
+    }
+
+    static func seriesTitle(_ title: String) -> String {
+        title.replacingOccurrences(of: #"(?i)\s*(?:第[0-9一二三四五六七八九十]+季|season\s+\d+)\s*$"#,
+                                   with: "", options: .regularExpression)
+    }
+
+    private static func seasonNumber(in title: String) -> Int? {
+        let suffix = title.dropFirst(seriesTitle(title).count)
+        if let range = suffix.range(of: #"[0-9]+"#, options: .regularExpression) {
+            return Int(suffix[range])
+        }
+        let numbers = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
+        return numbers.firstIndex { suffix.contains("第" + $0 + "季") }.map { $0 + 1 }
+    }
+
+    private static func search(titles: [String], token: String, kind: Kind, year: Int?) async -> Artwork? {
+        struct Query {
+            let title: String
+            let year: Int?
+        }
+        var queries = titles.prefix(3).map { Query(title: $0, year: year) }
+        if kind == .tv, let first = titles.first {
+            let base = seriesTitle(first)
+            if !base.isEmpty, base != first { queries.append(Query(title: base, year: nil)) }
+        }
         var complete = true
-        for language in ["zh-CN","en-US"] {
-            var components=URLComponents(string:"https://api.themoviedb.org/3/search/\(kind.rawValue)")!
-            components.queryItems=[.init(name:"query",value:title),.init(name:"language",value:language),.init(name:"include_adult",value:"false"),.init(name:"page",value:"1")]
-            guard let url=components.url else { continue }
-            var request=URLRequest(url:url)
-            request.timeoutInterval=8
-            request.setValue("Bearer \(token)",forHTTPHeaderField:"Authorization")
-            request.setValue("application/json",forHTTPHeaderField:"Accept")
-            guard let (data,response)=try? await URLSession.shared.data(for:request),
-                  (response as? HTTPURLResponse)?.statusCode==200,
-                  let root=try? JSONSerialization.jsonObject(with:data) as? [String:Any],
-                  let results=root["results"] as? [[String:Any]] else { complete = false; continue }
-            if let item = matchingTitle(in: results, title: title, year: year) {
-                return Artwork(
-                    poster: imageURL(item["poster_path"], size: "w780"),
-                    backdrop: imageURL(item["backdrop_path"], size: "w1280")
-                )
+        for query in queries {
+            for language in ["zh-CN", "en-US"] {
+                if Task.isCancelled { return nil }
+                do {
+                    let response = try await request("search/\(kind.rawValue)", token: token, query: [
+                        .init(name: "query", value: query.title), .init(name: "language", value: language),
+                        .init(name: "include_adult", value: "false")
+                    ])
+                    let rows = response["results"].array.compactMap { row -> [String: Any]? in
+                        guard case .object(let object) = row else { return nil }
+                        return object.mapValues(\.string)
+                    }
+                    guard let item = matchingTitle(in: rows, title: query.title, year: query.year),
+                          let id = Int(item["id"] as? String ?? ""), id > 0 else { continue }
+                    var artwork = Artwork(poster: imageURL(item["poster_path"], size: "w780"),
+                                          backdrop: imageURL(item["backdrop_path"], size: "w1280"), tmdbID: id)
+                    do {
+                        let gallery = try await request("\(kind.rawValue)/\(id)/images", token: token)
+                        let ranked = gallery["backdrops"].array.filter { $0["aspect_ratio"].double >= 1.3 }.sorted {
+                            let left = abs($0["aspect_ratio"].double - 16.0 / 9.0)
+                            let right = abs($1["aspect_ratio"].double - 16.0 / 9.0)
+                            if left != right { return left < right }
+                            return $0["vote_count"].int > $1["vote_count"].int
+                        }
+                        var seen = Set([artwork.backdrop].compactMap { $0 })
+                        let urls = ranked.compactMap { imageURL($0["file_path"].string, size: "w1280") }
+                            .filter { seen.insert($0).inserted }
+                        if artwork.backdrop == nil { artwork.backdrop = urls.first }
+                        artwork.alternatives = Array(urls.filter { $0 != artwork.backdrop }.prefix(3))
+                        if artwork.poster == nil {
+                            artwork.poster = gallery["posters"].array.lazy
+                                .filter { $0["aspect_ratio"].double > 0 && $0["aspect_ratio"].double < 1 }
+                                .compactMap { imageURL($0["file_path"].string, size: "w780") }.first
+                        }
+                    } catch {
+                        if artwork.backdrop == nil { return nil }
+                    }
+                    if kind == .tv, let season = titles.lazy.compactMap({ seasonNumber(in: $0) }).first, season > 0,
+                       let gallery = try? await request("tv/\(id)/season/\(season)/images", token: token),
+                       let poster = gallery["posters"].array.lazy
+                            .filter({ $0["aspect_ratio"].double > 0 && $0["aspect_ratio"].double < 1 })
+                            .compactMap({ imageURL($0["file_path"].string, size: "w780") }).first {
+                        artwork.poster = poster
+                    }
+                    return artwork
+                } catch BiliError.http(let code) where [401, 403, 429].contains(code) {
+                    return nil
+                } catch {
+                    complete = false
+                }
             }
         }
         return complete ? Artwork() : nil
@@ -215,7 +300,7 @@ struct PosterCard:View {
         }.buttonStyle(.plain)
         .task(id: loadKey) {
             loading = image == nil
-            let poster = await TMDBPosters.shared.poster(title: video.title, token: token, kind: kind)
+            let poster = await TMDBPosters.shared.artwork(for: video, token: token, kind: kind).poster
             let selected = await SeasonArtwork.load(preferred: poster, fallback: [video.cover], width: 720, portrait: true)
             guard !Task.isCancelled else { return }
             image = selected
@@ -246,7 +331,7 @@ struct PosterGrid:View {
                 var iterator=batch.makeIterator()
                 func addNext() {
                     guard !Task.isCancelled, let video=iterator.next() else { return }
-                    group.addTask { _=await TMDBPosters.shared.poster(title:video.title,token:token,kind:kind,year:nil) }
+                    group.addTask { _=await TMDBPosters.shared.artwork(for:video,token:token,kind:kind) }
                 }
                 for _ in 0..<4 { addNext() }
                 for await _ in group { addNext() }
@@ -279,13 +364,18 @@ struct SeasonArtwork: View {
     }
 
     @MainActor static func load(preferred: String?, fallback: [String], width: Int, portrait: Bool) async -> NSImage? {
+        await load(preferred: [preferred].compactMap { $0 }, fallback: fallback, width: width, portrait: portrait)
+    }
+
+    @MainActor static func load(preferred: [String], fallback: [String], width: Int, portrait: Bool) async -> NSImage? {
         var alternate: NSImage?
-        for source in [preferred, preferred.flatMap(Self.smallerTMDBImage)].compactMap({ $0 }) + fallback where !source.isEmpty {
+        let candidates = preferred.flatMap { [$0, smallerTMDBImage($0)].compactMap { $0 } }
+        for source in candidates + fallback where !source.isEmpty {
             guard !Task.isCancelled else { return nil }
             guard let image = await RemoteImageStore.shared.image(source, width: width) else { continue }
             let ratio = image.size.width / image.size.height
             if portrait ? ratio < 1 : ratio >= 1.3 { return image }
-            if portrait, source != preferred, alternate == nil { alternate = image }
+            if portrait, !candidates.contains(source), alternate == nil { alternate = image }
         }
         return alternate
     }
