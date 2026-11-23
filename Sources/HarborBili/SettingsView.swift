@@ -20,6 +20,7 @@ struct SettingsView:View {
     @State private var tmdbChecking = false
     @State private var tmdbStatus: String?
     @State private var tmdbFailed = false
+    @State private var cacheStatus: String?
     @Environment(UpdateController.self) private var updater
     var body:some View {
         NavigationSplitView {
@@ -45,6 +46,7 @@ struct SettingsView:View {
             try await TMDBPosters.validate(token: token)
             preferences.values.tmdbToken = token
             preferences.values.tmdbEnabled = true
+            preferences.refreshArtwork()
             tmdbDraft = ""
             tmdbFailed = false
             tmdbStatus = "令牌已验证"
@@ -88,6 +90,7 @@ struct SettingsView:View {
             Section("TMDB 海报") {
                 Toggle("使用 TMDB 图片", isOn: $prefs.values.tmdbEnabled)
                     .disabled(prefs.values.tmdbToken.isEmpty || tmdbChecking)
+                    .onChange(of: prefs.values.tmdbEnabled) { _, _ in prefs.refreshArtwork() }
                 LabeledContent("状态", value: prefs.values.tmdbToken.isEmpty ? "未配置" : prefs.values.tmdbEnabled ? "已启用" : "已停用")
                 SecureField(prefs.values.tmdbToken.isEmpty ? "粘贴 API 读取访问令牌" : "粘贴新令牌以替换", text: $tmdbDraft)
                     .textFieldStyle(.roundedBorder)
@@ -153,6 +156,19 @@ struct SettingsView:View {
                 if let notice=library.notice { Text(notice).foregroundStyle(.red) }
             }
             Section { Button("恢复所有偏好设置…") { reset=true } }
+            Section("缓存与文件") {
+                LabeledContent("图片磁盘缓存", value: ByteCountFormatter.string(
+                    fromByteCount: Int64(RemoteImageStore.shared.diskCacheSize), countStyle: .file))
+                Button("清除图片与海报缓存") {
+                    do {
+                        try preferences.clearArtworkCaches()
+                        cacheStatus = "缓存已清除"
+                    } catch {
+                        cacheStatus = error.localizedDescription
+                    }
+                }
+                if let cacheStatus { Text(cacheStatus).foregroundStyle(.secondary) }
+            }
         case .about:
             Section {
                 Label("BiliSwift",systemImage:"play.rectangle.fill").font(.largeTitle.bold())

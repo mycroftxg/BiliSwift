@@ -92,6 +92,13 @@ struct SeasonDetailView:View {
                 ToolbarItem(placement:.navigation) { if !presentation.immersive { Button { dismiss() } label:{ Image(systemName:"chevron.left") }.help("返回上一页") } }
                 ToolbarItem(placement:.primaryAction) { if !presentation.immersive { ShareLink(item:URL(string:"https://www.bilibili.com/bangumi/play/ss\(seasonID)")!) { Image(systemName:"square.and.arrow.up") } } }
             }
+            .task(id: "\(detail["title"].string)|\(preferences.values.activeTMDBToken)|\(preferences.artworkRevision)") {
+                guard !detail["title"].string.isEmpty else { return }
+                let image = await TMDBPosters.shared.backdrop(for: video, detail: detail, token: preferences.values.activeTMDBToken)
+                guard !Task.isCancelled else { return }
+                heroImage = image
+                heroReady = true
+            }
             .task(id:seasonID) { await load() }
             .task(id: "\(selected["id"].int)|\(preferences.values.quality)|\(preferences.values.codec)|\(preferences.values.preferredFormat)|\(preferences.values.lowPowerMode)") {
                 guard selected["id"].int > 0 else { return }
@@ -109,10 +116,6 @@ struct SeasonDetailView:View {
             detail=try await BiliAPI.shared.season(seasonID)
             followed=detail["user_status"]["follow"].int==1
             selected=episodes.first(where:{$0["id"].int==video.episodeID}) ?? episodes.first ?? .null
-            let image = await TMDBPosters.shared.backdrop(for: video, detail: detail, token: preferences.values.activeTMDBToken)
-            guard !Task.isCancelled else { return }
-            heroImage = image
-            heroReady=true
             if selected["aid"].int>0 { await loadComments(selected) }
         } catch { heroReady=true;failure=error.localizedDescription }
     }

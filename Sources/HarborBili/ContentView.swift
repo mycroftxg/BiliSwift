@@ -94,7 +94,10 @@ struct ContentView:View {
                     .toolbar {
                         ToolbarItem { if !presentation.immersive { Button {
                             if route == .messages { messageRefreshID = UUID() }
-                            else { Task { await reload(forceRefresh: true) } }
+                            else {
+                                if channel?.seasonType != nil || path.last?.videoID != nil { preferences.refreshArtwork() }
+                                Task { await reload(forceRefresh: true) }
+                            }
                         } label:{ Image(systemName:"arrow.clockwise") }.help("刷新").disabled(catalog.loading) } }
                         ToolbarItem { if !presentation.immersive,playback.video != nil { Button("继续播放",systemImage:"play.rectangle") { presentation.immersive=true;playback.player.playImmediately(atRate:playback.rate) } } }
                         ToolbarItem { if !presentation.immersive,!account.loggedIn { Button("登录") { login=true } } }
@@ -234,7 +237,7 @@ struct ContentView:View {
         } else {
             ScrollView {
                 VStack(alignment:.leading,spacing:0) {
-                    if nativeCatalog,!catalog.videos.isEmpty {HeroCarousel(videos:catalog.videos,height:heroHeight,active:catalogOverCover && !catalogScrolling && path.isEmpty && !presentation.immersive) {path.append(.video($0))}}
+                    if nativeCatalog,!catalog.videos.isEmpty {HeroCarousel(videos:catalog.videos,height:heroHeight,seasonKind:(channel?.seasonType).map(TMDBPosters.Kind.init(seasonType:)),active:catalogOverCover && !catalogScrolling && path.isEmpty && !presentation.immersive) {path.append(.video($0))}}
                     VStack(alignment:.leading,spacing:24) {
                     if route == .search {
                         HStack { TextField("搜索视频、UP 主或 BV 号",text:$query).textFieldStyle(.roundedBorder).onSubmit { submitted=query }
@@ -323,6 +326,7 @@ struct CoverImage:View {
 struct VideoCard:View {
     let video:Video
     var seasonBackdropToken: String?
+    @Environment(AppPreferences.self) private var preferences: AppPreferences?
     var suppressHover = false
     @State private var seasonBackdrop: NSImage?
     @State private var hovering=false
@@ -356,7 +360,7 @@ struct VideoCard:View {
         .animation(suppressHover ? nil : .smooth(duration:0.18),value:hovering)
         .onHover {hovering=$0}
         .accessibilityElement(children:.combine)
-        .task(id: video.id) {
+        .task(id: "\(video.id)|\(seasonBackdropToken ?? "")|\(preferences?.artworkRevision.uuidString ?? "")") {
             guard let seasonBackdropToken, let seasonID = video.seasonID, seasonID > 0,
                   let detail = try? await BiliAPI.shared.season(seasonID),
                   !Task.isCancelled else { return }
@@ -373,6 +377,7 @@ struct HeroCard:View {
     var height:CGFloat=540
     var showsCaption=true
     var contained:Bool=false
+    var preferredBackdrop: NSImage?
     @Environment(AppPreferences.self) private var preferences
     @State private var seasonBackdrop: NSImage?
     var body:some View {
@@ -389,8 +394,8 @@ struct HeroCard:View {
             .background {
                 ZStack {
                     if video.isSeason {
-                        if let seasonBackdrop {
-                            SeasonArtwork(image: seasonBackdrop)
+                        if let backdrop = preferredBackdrop ?? seasonBackdrop {
+                            SeasonArtwork(image: backdrop)
                         } else {
                             Color.black
                         }
@@ -402,8 +407,8 @@ struct HeroCard:View {
                 .frame(width:geometry.size.width,height:height).clipped()
             }
         }.frame(height:height)
-            .task(id: video.id) {
-                guard video.isSeason, let seasonID = video.seasonID,
+            .task(id: "\(video.id)|\(preferences.values.activeTMDBToken)|\(preferences.artworkRevision)|\(preferredBackdrop != nil)") {
+                guard preferredBackdrop == nil, video.isSeason, let seasonID = video.seasonID,
                       let detail = try? await BiliAPI.shared.season(seasonID),
                       !Task.isCancelled else { return }
                 let backdrop = await TMDBPosters.shared.backdrop(for: video, detail: detail, token: preferences.values.activeTMDBToken)

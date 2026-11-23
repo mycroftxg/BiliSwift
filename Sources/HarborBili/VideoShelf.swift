@@ -32,6 +32,7 @@ struct VideoShelf:View {
 struct HeroCarousel:View {
     let videos:[Video]
     let height:CGFloat
+    var seasonKind: TMDBPosters.Kind?
     let active:Bool
     let open:(Video)->Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -44,13 +45,24 @@ struct HeroCarousel:View {
     @State private var captionTask:Task<Void,Never>?
     @State private var captionVideo:Video?
     @State private var switching=false
-    private var slides:[Video] {Array(videos.prefix(5))}
+    @State private var preferredBackdrops: [String: NSImage] = [:]
+    private var candidateKey: String {
+        videos.prefix(12).map(\.id).joined(separator: ",") + "|" + preferences.values.activeTMDBToken
+            + "|" + preferences.artworkRevision.uuidString + "|" + String(preferences.values.lowPowerMode)
+    }
+    private var slides: [Video] {
+        let candidates = videos.prefix(12)
+        guard !preferredBackdrops.isEmpty else { return Array(candidates.prefix(5)) }
+        let ranked = candidates.filter { preferredBackdrops[$0.id] != nil }
+            + candidates.filter { preferredBackdrops[$0.id] == nil }
+        return Array(ranked.prefix(5))
+    }
     private var current:Video? {slides.isEmpty ? nil:slides[min(index,slides.count-1)]}
     var body:some View {
         GeometryReader { geometry in
             ZStack(alignment:.bottomLeading) {
                 if let current {
-                    HeroCard(video:current,action:{open(current)},height:height,showsCaption:false)
+                    HeroCard(video:current,action:{open(current)},height:height,showsCaption:false,preferredBackdrop:preferredBackdrops[current.id])
                         .id(current.id)
                         .transition(.opacity)
                 }
@@ -90,15 +102,7 @@ struct HeroCarousel:View {
                 captionOpacity = 1
                 switching = false
             }
-            .task(id:slides.map(\.id).joined(separator:",")) {
-                guard !slides.isEmpty else { return }
-                // 低电量模式只预取当前一张；正常模式预取全部，切换更顺。
-                let candidates=preferences.values.lowPowerMode ? [slides[min(index,slides.count-1)]] : Array(slides.prefix(3))
-                for video in candidates {
-                    guard !Task.isCancelled else { return }
-                    await prefetch(video)
-                }
-            }
+            .task(id: candidateKey) { await rankSeasonSlides() }
             .task(id:"\(active)|\(reduceMotion)|\(preferences.values.lowPowerMode)|\(slides.map(\.id).joined(separator:","))") {
                 guard active,slides.count>1,!reduceMotion,!preferences.values.lowPowerMode,!ProcessInfo.processInfo.isLowPowerModeEnabled else{return}
                 while !Task.isCancelled {
@@ -108,16 +112,62 @@ struct HeroCarousel:View {
                 }
             }
     }
-    private func prefetch(_ video:Video) async {
-        if video.isSeason {
-            guard let seasonID=video.seasonID,
-                  let detail=try? await BiliAPI.shared.season(seasonID),
-                  !Task.isCancelled else { return }
-            _ = await TMDBPosters.shared.backdrop(for:video,detail:detail,token:preferences.values.activeTMDBToken)
-        } else {
-            _ = await RemoteImageStore.shared.image(video.cover,width:1920)
+    private func rankSeasonSlides() async {
+        let token = preferences.values.activeTMDBToken
+        guard let seasonKind else {
+            let count = preferences.values.lowPowerMode ? 1 : 3
+            for video in videos.prefix(count) {
+                guard !Task.isCancelled else { return }
+                _ = await RemoteImageStore.shared.image(video.cover, width: 1920)
+            }
+            return
         }
+        guard !token.isEmpty else {
+            if !preferredBackdrops.isEmpty { updateRankedBackdrops([:]) }
+            return
+        }
+        let limit = preferences.values.lowPowerMode ? 5 : 12
+        let candidates = Array(videos.prefix(limit))
+        var result: [String: NSImage] = [:]
+        for start in stride(from: 0, to: candidates.count, by: 4) {
+            guard !Task.isCancelled else { return }
+            let batch = candidates[start..<min(start + 4, candidates.count)]
+            let matched = await withTaskGroup(of: (String, String?).self) { group in
+                for video in batch {
+                    group.addTask {
+                        let artwork = await TMDBPosters.shared.artwork(title: video.title, token: token, kind: seasonKind)
+                        return (video.id, artwork.backdrop)
+                    }
+                }
+                var urls: [String: String] = [:]
+                for await (id, url) in group { urls[id] = url }
+                return urls
+            }
+            for video in batch {
+                guard !Task.isCancelled else { return }
+                if let url = matched[video.id],
+                   let image = await SeasonArtwork.load(preferred: url, fallback: [], width: 1920, portrait: false) {
+                    result[video.id] = image
+                    if result.count == 5 { break }
+                }
+            }
+            if result.count == 5 { break }
+        }
+        guard !Task.isCancelled else { return }
+        updateRankedBackdrops(result)
     }
+
+    private func updateRankedBackdrops(_ images: [String: NSImage]) {
+        captionTask?.cancel()
+        captionTask = nil
+        switching = false
+        captionVideo = nil
+        captionOffset = 0
+        captionOpacity = 1
+        index = 0
+        preferredBackdrops = images
+    }
+
     private func step(by offset:Int) {
         guard slides.count>1 else{return}
         step(to:(min(index,slides.count-1)+offset+slides.count)%slides.count)

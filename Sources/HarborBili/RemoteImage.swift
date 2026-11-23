@@ -12,10 +12,24 @@ final class RemoteImageStore {
     private let cache=NSCache<NSString,NSImage>()
     private var colors:[String:NSColor]=[:]
     private var inflight:[String:Task<NSImage?,Never>]=[:]
+    private var generation = UUID()
+    private let urlCache = URLCache(memoryCapacity: 64 << 20, diskCapacity: 512 << 20, diskPath: "harbor-images")
+
+    var diskCacheSize: Int { urlCache.currentDiskUsage }
+
+    func clearCache() {
+        generation = UUID()
+        for task in inflight.values { task.cancel() }
+        inflight.removeAll()
+        cache.removeAllObjects()
+        colors.removeAll()
+        urlCache.removeAllCachedResponses()
+    }
+
     private let session:URLSession
     private init() {
         let config=URLSessionConfiguration.default
-        config.urlCache=URLCache(memoryCapacity:64<<20,diskCapacity:512<<20,diskPath:"harbor-images")
+        config.urlCache=urlCache
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.httpMaximumConnectionsPerHost=8
         config.timeoutIntervalForRequest=20
@@ -39,6 +53,7 @@ final class RemoteImageStore {
         let key=url.absoluteString
         if let hit=cache.object(forKey:key as NSString) { return hit }
         if let running=inflight[key] { return await running.value }
+        let ticket = generation
         let session=self.session
         let task=Task<NSImage?,Never> {
             var request=URLRequest(url:url)
@@ -51,6 +66,7 @@ final class RemoteImageStore {
         }
         inflight[key]=task
         let image=await task.value
+        guard generation == ticket else { return nil }
         inflight[key]=nil
         if let image { cache.setObject(image,forKey:key as NSString,cost:max(1,Int(image.size.width*image.size.height*4))) }
         return image

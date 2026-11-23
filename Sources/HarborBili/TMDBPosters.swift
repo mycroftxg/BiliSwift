@@ -29,6 +29,25 @@ import CryptoKit
 
     private var inflight:[String:Task<Artwork,Never>]=[:]
 
+    private var generation = UUID()
+
+    func retryUnmatched() {
+        cache = cache.filter { $0.value.artwork.poster != nil || $0.value.artwork.backdrop != nil }
+        generation = UUID()
+        for task in inflight.values { task.cancel() }
+        inflight.removeAll()
+    }
+
+    func clearCache() throws {
+        retryUnmatched()
+        cache.removeAll()
+        pendingSave?.cancel()
+        pendingSave = nil
+        if FileManager.default.fileExists(atPath: Self.cacheURL.path) {
+            try FileManager.default.removeItem(at: Self.cacheURL)
+        }
+    }
+
     static func year(from text: String) -> Int? {
         let value = text.prefix(4)
         guard value.count == 4, let year = Int(value), (1800...2100).contains(year) else { return nil }
@@ -48,8 +67,10 @@ import CryptoKit
         let key = "\(fingerprint)|\(kind.rawValue)|\(trimmed)|\(year ?? 0)"
         if let hit = cache[key], hit.expires > .now { return hit.artwork }
         if let task=inflight[key] { return await task.value }
+        let ticket = generation
         let task=Task<Artwork,Never> {
             let result = await Self.search(title: trimmed, token: value, kind: kind, year: year)
+            guard self.generation == ticket, !Task.isCancelled else { return Artwork() }
             if let result {
                 let found = result.poster != nil || result.backdrop != nil
                 self.cache[key] = Cached(artwork: result, expires: Date().addingTimeInterval(found ? 604800 : 1800))
@@ -62,7 +83,7 @@ import CryptoKit
         }
         inflight[key]=task
         let result=await task.value
-        inflight[key]=nil
+        if generation == ticket { inflight[key]=nil }
         return result
     }
 
@@ -159,8 +180,12 @@ struct PosterCard:View {
     let video:Video
     var token:String=""
     var kind:TMDBPosters.Kind = .tv
+    @Environment(AppPreferences.self) private var preferences
     @State private var image:NSImage?
     @State private var loading=true
+    private var loadKey: String {
+        [video.bvid, kind.rawValue, token, preferences.artworkRevision.uuidString].joined(separator: "|")
+    }
     var body:some View {
         NavigationLink(value:AppRoute.video(video)) {
             VStack(alignment:.leading,spacing:8) {
@@ -188,7 +213,8 @@ struct PosterCard:View {
                 }
             }
         }.buttonStyle(.plain)
-        .task(id: video.bvid + "|" + kind.rawValue + "|" + token) {
+        .task(id: loadKey) {
+            loading = image == nil
             let poster = await TMDBPosters.shared.poster(title: video.title, token: token, kind: kind)
             let selected = await SeasonArtwork.load(preferred: poster, fallback: [video.cover], width: 720, portrait: true)
             guard !Task.isCancelled else { return }
@@ -202,7 +228,11 @@ struct PosterGrid:View {
     let videos:[Video]
     var token:String=""
     var kind:TMDBPosters.Kind = .tv
-    private var signature:String { videos.prefix(24).map(\.bvid).joined(separator:",") + "|" + kind.rawValue + "|" + token }
+    @Environment(AppPreferences.self) private var preferences
+    private var signature: String {
+        let ids = videos.prefix(24).map(\.bvid).joined(separator: ",")
+        return [ids, kind.rawValue, token, preferences.artworkRevision.uuidString].joined(separator: "|")
+    }
     var body:some View {
         LazyVGrid(columns:[GridItem(.adaptive(minimum:170,maximum:230),spacing:20)],alignment:.leading,spacing:26) {
             ForEach(videos) { video in

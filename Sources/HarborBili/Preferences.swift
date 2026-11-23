@@ -59,6 +59,19 @@ struct PreferenceValues:Codable,Equatable {
 
 }
 @MainActor @Observable final class AppPreferences {
+    var artworkRevision = UUID()
+
+    func refreshArtwork() {
+        TMDBPosters.shared.retryUnmatched()
+        artworkRevision = UUID()
+    }
+
+    func clearArtworkCaches() throws {
+        RemoteImageStore.shared.clearCache()
+        defer { artworkRevision = UUID() }
+        try TMDBPosters.shared.clearCache()
+    }
+
     var values:PreferenceValues { didSet { save() } }
     private let defaults:UserDefaults
     init(defaults:UserDefaults = .standard) {

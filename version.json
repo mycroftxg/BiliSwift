@@ -1,8 +1,8 @@
 {
-  "version": "0.7.2",
-  "build": 210,
-  "dmg": "BiliSwift-0.7.2.dmg",
-  "sha256": "0ffe089a9e036999f51149b392c023cba73a453566f77df5c043bfe05796e5e2",
-  "notes": "改善 TMDB 海报稳定性，新增令牌验证和启用状态，包含预加载和高级音轨优化。",
-  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.7.2"
+  "version": "0.7.3",
+  "build": 211,
+  "dmg": "BiliSwift-0.7.3.dmg",
+  "sha256": "9305823e5b75a93456a3ce732b8439112c4c2dc167dc996bdbd95aa2f2e66a89",
+  "notes": "启用 TMDB 或刷新影视时重新匹配封面。PGC 轮播优先选择 TMDB 横幅，设置新增清除图片和海报缓存。",
+  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.7.3"
 }
