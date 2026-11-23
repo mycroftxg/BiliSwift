@@ -34,18 +34,27 @@ enum LiveLog {
     private var authenticated=false
     private var parsed=0
     private var watchdog:Task<Void,Never>?
+    private var reconnect: Task<Void, Never>?
+    private var retryDelay = 2
+    private var lastResponse = ContinuousClock.now
     private var heartbeat:Task<Void,Never>?
     private let onStatus:(String)->Void
-    private let onMessage:(String,String,UInt32)->Void
+    private let onMessage:(String,String,UInt32,[String:String])->Void
 
-    init(onStatus:@escaping (String)->Void = { _ in },onMessage:@escaping (String,String,UInt32)->Void) {
+    init(onStatus:@escaping (String)->Void = { _ in },onMessage:@escaping (String,String,UInt32,[String:String])->Void) {
         self.onStatus=onStatus
         self.onMessage=onMessage
     }
 
-    func connect(roomID:Int) async throws {
+    func connect(roomID:Int) {
         disconnect()
-        self.roomID=roomID;token="";packets=0;parsed=0
+        self.roomID = roomID
+        retryDelay = 2
+        startConnection(after: 0)
+    }
+
+    private func fetchNodes(roomID:Int) async throws {
+        token="";packets=0;parsed=0
         cookieHeader=await BiliAPI.shared.cookieHeader()
         let cookieBuvid=await BiliAPI.shared.cookieValue("buvid3")
         let cookieUid=await BiliAPI.shared.cookieValue("DedeUserID")
@@ -73,17 +82,40 @@ enum LiveLog {
     }
 
     func disconnect() {
+        reconnect?.cancel();reconnect=nil
         watchdog?.cancel();watchdog=nil
         heartbeat?.cancel();heartbeat=nil
         connection?.cancel();connection=nil
         buffer=Data();handshakeDone=false
     }
 
+    private func scheduleReconnect() {
+        let delay = retryDelay
+        retryDelay = min(delay * 2, 30)
+        startConnection(after: delay)
+    }
+
+    private func startConnection(after delay:Int) {
+        let room = roomID
+        reconnect = Task { [weak self] in
+            guard let self else { return }
+            if delay > 0 { self.onStatus("直播聊天已断开，正在重连…") }
+            do {
+                try await Task.sleep(for: .seconds(delay))
+                try await self.fetchNodes(roomID: room)
+                self.reconnect = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                LiveLog.write("chat connection failed: \(error.localizedDescription)")
+                self.scheduleReconnect()
+            }
+        }
+    }
+
     private func open(_ index:Int) {
         guard index<candidates.count else {
             disconnect()
-            onStatus("直播间聊天连接失败")
-            LiveLog.write("all candidates failed")
+            scheduleReconnect()
             return
         }
         candidateIndex=index
@@ -150,7 +182,7 @@ User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15
         conn.receive(minimumIncompleteLength:1,maximumLength:65536) { [weak self] data,_,isComplete,error in
             Task { @MainActor in
                 guard let self,self.connection === conn else { return }
-                if let data,!data.isEmpty { self.consume(data) }
+                if let data,!data.isEmpty { self.lastResponse = .now; self.consume(data) }
                 guard self.connection === conn else { return }
                 if let error {
                     LiveLog.write("receive error: \(error.localizedDescription)")
@@ -211,6 +243,10 @@ User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15
             while !Task.isCancelled {
                 try? await Task.sleep(for:.seconds(30))
                 guard let self,!Task.isCancelled,self.connection != nil else { return }
+                if self.lastResponse.duration(to: .now) > .seconds(65) {
+                    self.open(self.candidateIndex + 1)
+                    return
+                }
                 self.sendHeartbeat()
             }
         }
@@ -316,6 +352,7 @@ User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15
                     return
                 }
                 authenticated=true
+                retryDelay=2
                 watchdog?.cancel();watchdog=nil
                 onStatus("已连接，等待聊天消息…")
                 LiveLog.write("chat authenticated")
@@ -323,6 +360,14 @@ User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15
             else if op==5,authenticated { parse(body) }
             offset+=length
         }
+    }
+
+    static func emotes(in metadata: JSON, text: String) -> [String: String] {
+        let raw = metadata["url"].string
+        guard text.hasPrefix("["), text.hasSuffix("]"), !raw.isEmpty,
+              let url = URL(string: Video.secure(raw)), url.scheme == "https",
+              let host = url.host, host == "hdslb.com" || host.hasSuffix(".hdslb.com") else { return [:] }
+        return [text: url.absoluteString]
     }
 
     private func parse(_ body:Data) {
@@ -338,7 +383,8 @@ User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15
         var color:UInt32=0xFFFFFF
         let meta=info[0].array
         if meta.count>3,meta[3].int>0 { color=UInt32(truncatingIfNeeded:meta[3].int) }
-        onMessage(user,text,color)
+        let emotes = meta.indices.contains(13) ? Self.emotes(in: meta[13], text: text) : [:]
+        onMessage(user,text,color,emotes)
     }
 
     nonisolated static func packet(op:UInt32,body:Data)->Data {

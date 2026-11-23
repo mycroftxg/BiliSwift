@@ -20,6 +20,8 @@ struct ContentView:View {
     @State private var login=false
     @State private var homeJump=UUID()
     @State private var messageRefreshID = UUID()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var catalogScrolling = false
     @State private var nearBottom=false
     @State private var viewport=CGSize(width:1000,height:800)
     @State private var sidebarWidth:CGFloat=220
@@ -92,7 +94,7 @@ struct ContentView:View {
                     .toolbar {
                         ToolbarItem { if !presentation.immersive { Button {
                             if route == .messages { messageRefreshID = UUID() }
-                            else { Task { await reload() } }
+                            else { Task { await reload(forceRefresh: true) } }
                         } label:{ Image(systemName:"arrow.clockwise") }.help("刷新").disabled(catalog.loading) } }
                         ToolbarItem { if !presentation.immersive,playback.video != nil { Button("继续播放",systemImage:"play.rectangle") { presentation.immersive=true;playback.player.playImmediately(atRate:playback.rate) } } }
                         ToolbarItem { if !presentation.immersive,!account.loggedIn { Button("登录") { login=true } } }
@@ -142,15 +144,26 @@ struct ContentView:View {
                         presentation.leavePlayback()
                     }
                 })
-                if playback.commentsOpen,playback.video?.roomID == nil {
-                    CommentSidebar(aid:playback.commentsAid,bvid:playback.video?.bvid ?? "",tint:playback.videoTint,comments:playback.videoComments,onClose:{ withAnimation(.snappy(duration:0.3)) { playback.commentsOpen=false } })
-                        .frame(width:min(380,max(280,viewport.width*0.42)))
-                        .transition(.move(edge:.trailing))
+                if playback.commentsOpen, let video = playback.video {
+                    Group {
+                        if video.roomID != nil {
+                            LiveChatPanel(messages: playback.liveMessages, status: playback.liveChatStatus) {
+                                playback.commentsOpen = false
+                            }
+                        } else {
+                            CommentSidebar(aid: playback.commentsAid, bvid: video.bvid) {
+                                playback.commentsOpen = false
+                            }
+                            .id(video.bvid)
+                        }
+                    }
+                    .frame(width: min(380, max(200, viewport.width * 0.34)))
+                    .transition(.move(edge: .trailing))
                 }
             }
             .background(.black).ignoresSafeArea()
-            .transition(.playerCollapse)
-            .animation(.spring(response:0.5,dampingFraction:0.9),value:playback.commentsOpen)
+            .transition(reduceMotion ? .identity : .playerCollapse)
+            .animation(reduceMotion ? nil : .spring(response:0.36,dampingFraction:0.92),value:playback.commentsOpen)
         }
         }.toolbar(removing:.sidebarToggle)
             .toolbarVisibility(.visible,for:.windowToolbar)
@@ -172,7 +185,7 @@ struct ContentView:View {
             }
             .onChange(of:path) { _,value in if value.isEmpty { presentation.toolbarOverCover=catalogOverCover } }
             .onChange(of:account.mid) { _,_ in
-                path=[];presentation.leavePlayback();playback.stop();catalog.resetAccountData()
+                path=[];presentation.leavePlayback();playback.cancelPreload();playback.stop();catalog.resetAccountData()
             }
     }
     /// 全屏切换后强制重建播放器布局，避免 AVPlayerLayer/侧栏沿用旧的全屏尺寸。
@@ -221,7 +234,7 @@ struct ContentView:View {
         } else {
             ScrollView {
                 VStack(alignment:.leading,spacing:0) {
-                    if nativeCatalog,!catalog.videos.isEmpty {HeroCarousel(videos:catalog.videos,height:heroHeight,active:catalogOverCover && path.isEmpty && !presentation.immersive) {path.append(.video($0))}}
+                    if nativeCatalog,!catalog.videos.isEmpty {HeroCarousel(videos:catalog.videos,height:heroHeight,active:catalogOverCover && !catalogScrolling && path.isEmpty && !presentation.immersive) {path.append(.video($0))}}
                     VStack(alignment:.leading,spacing:24) {
                     if route == .search {
                         HStack { TextField("搜索视频、UP 主或 BV 号",text:$query).textFieldStyle(.roundedBorder).onSubmit { submitted=query }
@@ -243,21 +256,21 @@ struct ContentView:View {
                         }
                     }
                     if !catalog.videos.isEmpty {
-                        HStack { Text(channel?.title ?? (route == .home ? "热门精选":route.rawValue)).font(.title2.bold());Spacer();if route == .home { Text("来自哔哩哔哩热门榜").font(.caption).foregroundStyle(.secondary) } }
+                        HStack { Text(channel?.title ?? (route == .home ? "热门精选":route.rawValue)).font(.title2.bold());Spacer(); }
                         if let seasonType = channel?.seasonType {
                             PosterGrid(videos:catalog.videos,
-                                       token:preferences.values.tmdbToken,
+                                       token:preferences.values.activeTMDBToken,
                                        kind:TMDBPosters.Kind(seasonType: seasonType))
                         } else if nativeCatalog {
-                            VideoShelf(videos:Array(catalog.videos.prefix(10)))
+                            VideoShelf(videos:Array(catalog.videos.prefix(10)), suppressHover: catalogScrolling)
                             if catalog.videos.count>10 {
                                 Text("继续发现").font(.title2.bold())
-                                VideoShelf(videos:Array(catalog.videos.dropFirst(10).prefix(10)))
+                                VideoShelf(videos:Array(catalog.videos.dropFirst(10).prefix(10)), suppressHover: catalogScrolling)
                             }
                             if catalog.videos.count>20 {
                                 Text("为你发现更多").font(.title2.bold())
                                 LazyVGrid(columns:[GridItem(.adaptive(minimum:220,maximum:360),spacing:20)],alignment:.leading,spacing:26) {
-                                    ForEach(Array(catalog.videos.dropFirst(20))) { video in NavigationLink(value:AppRoute.video(video)) { VideoCard(video:video) }.buttonStyle(.plain) }
+                                    ForEach(catalog.videos.dropFirst(20)) { video in NavigationLink(value:AppRoute.video(video)) { VideoCard(video:video, suppressHover: catalogScrolling) }.buttonStyle(.plain) }
                                 }
                             }
                         } else {
@@ -265,7 +278,7 @@ struct ContentView:View {
                             ForEach(catalog.videos) { video in NavigationLink(value:AppRoute.video(video)) { VideoCard(video:video) }.buttonStyle(.plain) }
                         }
                         }
-                        AutoLoadFooter(hasMore:catalog.canLoadMore,loading:catalog.loading) { await reload(more:true) }
+                        if !nativeCatalog { AutoLoadFooter(hasMore:catalog.canLoadMore,loading:catalog.loading) { await reload(more:true) } }
                     } else if !catalog.loading,catalog.error==nil {
                         ContentUnavailableView(route == .search ? "搜索你想看的内容":"这里还没有视频",systemImage:route.symbol,description:Text(route == .search ? "输入关键词后按回车搜索。":"登录后可查看在线资料库；观看视频后会保存本地进度。"))
                     }
@@ -274,6 +287,11 @@ struct ContentView:View {
                 }
             }.ignoresSafeArea(edges:nativeCatalog ? .top:[])
                 .id(selection+homeJump.uuidString)
+                .onScrollPhaseChange { _, phase in
+                    let scrolling = phase != .idle
+                    if catalogScrolling != scrolling { catalogScrolling = scrolling }
+                }
+                .onChange(of: selection) { _, _ in catalogScrolling = false }
                 .onScrollGeometryChange(for:Bool.self) { geometry in
                     geometry.contentOffset.y+geometry.containerSize.height>geometry.contentSize.height-750
                 } action:{ _,value in if nearBottom != value { nearBottom=value;if value { loadNextHomePage() } } }
@@ -291,8 +309,8 @@ struct ContentView:View {
         guard nativeCatalog,nearBottom,!catalog.loading,catalog.canLoadMore,catalog.error==nil,!catalog.videos.isEmpty else { return }
         Task { await reload(more:true) }
     }
-    private func reload(more:Bool=false) async {
-        await catalog.load(route,keyword:submitted,account:account,library:library,more:more,channel:channel)
+    private func reload(more:Bool=false,forceRefresh:Bool=false) async {
+        await catalog.load(route,keyword:submitted,account:account,library:library,more:more,channel:channel,forceRefresh:forceRefresh)
     }
 }
 struct CoverImage:View {
@@ -305,6 +323,7 @@ struct CoverImage:View {
 struct VideoCard:View {
     let video:Video
     var seasonBackdropToken: String?
+    var suppressHover = false
     @State private var seasonBackdrop: NSImage?
     @State private var hovering=false
     var body:some View {
@@ -314,7 +333,7 @@ struct VideoCard:View {
                     if let seasonBackdrop { SeasonArtwork(image: seasonBackdrop) }
                 }
                 .overlay(alignment:.bottomTrailing) {
-                    if video.roomID == nil {
+                    if video.roomID == nil, !video.durationLabel.isEmpty {
                         Text(video.durationLabel).font(.caption.monospacedDigit()).padding(5).background(.black.opacity(0.75),in:.rect(cornerRadius:5)).foregroundStyle(.white).padding(7)
                     }
                 }
@@ -329,12 +348,12 @@ struct VideoCard:View {
                 }
                 .clipShape(.rect(cornerRadius:12))
             Text(video.title).font(.headline).lineLimit(2).frame(height:40,alignment:.topLeading)
-            Text(video.author+" · "+video.viewLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(video.metadataLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         .contentShape(.rect)
-        .scaleEffect(hovering ? 1.015:1)
-        .shadow(color:.black.opacity(hovering ? 0.22:0),radius:hovering ? 12:0,y:hovering ? 6:0)
-        .animation(.smooth(duration:0.18),value:hovering)
+        .scaleEffect(hovering && !suppressHover ? 1.015:1)
+        .shadow(color:.black.opacity(hovering && !suppressHover ? 0.22:0),radius:hovering && !suppressHover ? 12:0,y:hovering && !suppressHover ? 6:0)
+        .animation(suppressHover ? nil : .smooth(duration:0.18),value:hovering)
         .onHover {hovering=$0}
         .accessibilityElement(children:.combine)
         .task(id: video.id) {
@@ -387,7 +406,7 @@ struct HeroCard:View {
                 guard video.isSeason, let seasonID = video.seasonID,
                       let detail = try? await BiliAPI.shared.season(seasonID),
                       !Task.isCancelled else { return }
-                let backdrop = await TMDBPosters.shared.backdrop(for: video, detail: detail, token: preferences.values.tmdbToken)
+                let backdrop = await TMDBPosters.shared.backdrop(for: video, detail: detail, token: preferences.values.activeTMDBToken)
                 guard !Task.isCancelled else { return }
                 seasonBackdrop = backdrop
             }
@@ -409,7 +428,7 @@ struct HeroCaption:View {
                 .background(video.roomID == nil ? AnyShapeStyle(.clear):AnyShapeStyle(.red.opacity(0.9)),in:.capsule)
                 .glassEffect(video.roomID == nil ? .regular:.identity,in:.capsule)
             Text(video.title).font(.system(size:max(24,min(36,width*0.036)),weight:.bold)).lineLimit(height<420 ? 2:3).frame(maxWidth:textWidth,alignment:.leading)
-            Text(video.author+" · "+video.viewLabel).font(.subheadline).foregroundStyle(.white.opacity(0.8))
+            Text(video.metadataLabel).font(.subheadline).foregroundStyle(.white.opacity(0.8))
             Button(action:action) { Label(video.roomID == nil ? "观看视频":"观看直播",systemImage:"play.fill").font(.headline).padding(.horizontal,28).padding(.vertical,10) }
                 .buttonStyle(.glassProminent).buttonBorderShape(.capsule).tint(.white).foregroundStyle(.black)
         }

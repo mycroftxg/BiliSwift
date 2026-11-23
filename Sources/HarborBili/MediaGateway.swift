@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OSLog
 import HarborCore
 
 /// Private loopback-only DASH/fMP4 → HLS byte-range gateway. No transcoding and no remote listener.
@@ -9,6 +10,26 @@ actor MediaGateway {
     private var stopped=false
     private var requests:[UUID:Task<(Data,URLResponse),Error>]=[:]
     private var connections:[ObjectIdentifier:NWConnection]=[:]
+    private static let diagnostics = Logger(subsystem: "app.biliswift.mac", category: "MediaGateway")
+    private struct RangeKey: Hashable {
+        let urls: [URL]
+        let offset: UInt64
+        let length: UInt64
+    }
+    private var warmTask: Task<Void, Never>?
+    private var warmRanges: [RangeKey: (Data, HTTPURLResponse)] = [:]
+    private var warmGeneration = UUID()
+
+    func clearWarmRanges() {
+        warmGeneration = UUID()
+        warmTask?.cancel()
+        warmTask = nil
+        warmRanges.removeAll()
+    }
+
+    private var activeRanges: [RangeKey: Task<(Data, HTTPURLResponse), Error>] = [:]
+    private var preferredCDN: [[URL]: URL] = [:]
+    private var vodRoutes: [[String]] = []
     private var liveMap:[URL:String]=[:]
     private var liveOrder:[URL]=[]
     private var listener: NWListener?
@@ -47,7 +68,9 @@ actor MediaGateway {
         port = bound.rawValue
     }
     func stop() {
-        stopped=true;listener?.cancel();listener=nil;resources.removeAll();liveMap.removeAll();liveOrder.removeAll()
+        clearWarmRanges()
+        for task in activeRanges.values { task.cancel() };activeRanges.removeAll()
+        stopped=true;listener?.cancel();listener=nil;resources.removeAll();vodRoutes.removeAll();preferredCDN.removeAll();liveMap.removeAll();liveOrder.removeAll()
         for request in requests.values {request.cancel()}
         for connection in connections.values {connection.cancel()};connections.removeAll()
     }
@@ -92,9 +115,7 @@ actor MediaGateway {
             switch resource {
             case .text(let data): send(connection,status:"200 OK",data:data,type:"application/vnd.apple.mpegurl")
             case .playlist(let url):
-                let (data,_)=try await fetchLive(url)
-                guard data.count<2*1024*1024,let text=String(data:data,encoding:.utf8),text.hasPrefix("#EXTM3U"),!text.contains("com.apple.streamingkeydelivery") else {throw BiliError.invalid("不支持的直播播放列表")}
-                let rewritten=try rewritePlaylist(text,base:url)
+                let rewritten = try await loadLivePlaylist(url)
                 send(connection,status:"200 OK",data:Data(rewritten.utf8),type:"application/vnd.apple.mpegurl")
             case .stream(let url):
                 let rangeLine=lines.first(where:{$0.lowercased().hasPrefix("range:")})
@@ -107,12 +128,17 @@ actor MediaGateway {
                 let range = rangeLine.dropFirst(6).trimmingCharacters(in:.whitespaces)
                 guard range.hasPrefix("bytes=") else { throw BiliError.invalid("无效范围") }
                 let span = try ByteSpan(String(range.dropFirst(6)))
-                guard span.length <= 32 * 1024 * 1024 else { throw BiliError.invalid("分段过大") }
+                guard span.length <= 128 * 1024 * 1024 else { throw BiliError.invalid("分段过大") }
                 let (data,http) = try await fetch(urls,span:span)
-                let contentRange = http.value(forHTTPHeaderField:"Content-Range") ?? "bytes \(span.offset)-\(span.offset+span.length-1)/*"
+                let total = http.value(forHTTPHeaderField: "Content-Range")?.split(separator: "/").last.map(String.init) ?? "*"
+                let contentRange = "bytes \(span.offset)-\(span.offset + span.length - 1)/\(total)"
                 send(connection,status:"206 Partial Content",data:data,type:"video/mp4",extra:"Content-Range: \(contentRange)\r\nAccept-Ranges: bytes\r\n")
             }
-        } catch { send(connection,status:"502 Bad Gateway",data:Data("媒体分段暂不可用".utf8),type:"text/plain") }
+        } catch {
+            let issue = error as NSError
+            Self.diagnostics.error("Gateway request failed domain=\(issue.domain, privacy: .public) code=\(issue.code)")
+            send(connection,status:"502 Bad Gateway",data:Data("媒体分段暂不可用".utf8),type:"text/plain")
+        }
     }
     private func send(_ connection:NWConnection,status:String,data:Data,type:String,extra:String = "") {
         var response = Data("HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\(extra)\r\n".utf8)
@@ -120,27 +146,127 @@ actor MediaGateway {
         connection.send(content:response,completion:.contentProcessed { _ in connection.cancel() })
     }
     private func fetch(_ urls:[URL],span:ByteSpan) async throws -> (Data,HTTPURLResponse) {
-        for url in urls.prefix(4) {
-            do { return try await fetchOne(url,span:span) }
-            catch is CancellationError { throw CancellationError() }
-            catch { if stopped || Task.isCancelled { throw CancellationError() } }
+        let key = RangeKey(urls: urls, offset: span.offset, length: span.length)
+        if let warmed = warmRanges[key] { return warmed }
+        if let existing = activeRanges[key] { return try await existing.value }
+        let task = Task { try await fetchFromMirrors(urls, span: span) }
+        activeRanges[key] = task
+        defer { activeRanges.removeValue(forKey: key) }
+        return try await task.value
+    }
+
+    private func fetchFromMirrors(_ urls: [URL], span: ByteSpan) async throws -> (Data, HTTPURLResponse) {
+        let preferred = preferredCDN[urls]
+        let ordered = (preferred.map { [$0] } ?? []) + urls.filter { $0 != preferred }
+        let candidates = Array(ordered.prefix(4))
+        let firstPair = Array(candidates.prefix(2))
+        if let result = try await firstAvailable(firstPair, span: span) {
+            remember(result.url, for: urls)
+            return (result.data, result.response)
+        }
+        for url in candidates.dropFirst(2) {
+            do {
+                let result = try await fetchChunks(url, span: span)
+                remember(url, for: urls)
+                return result
+            } catch {
+                if stopped || Task.isCancelled { throw CancellationError() }
+            }
         }
         throw BiliError.invalid("所有片源镜像均无法读取，请刷新播放地址或检查网络。")
     }
+
+    private func firstAvailable(_ urls: [URL], span: ByteSpan) async throws -> (url: URL, data: Data, response: HTTPURLResponse)? {
+        // Avoid downloading a second large copy while the primary transfer is in progress.
+        if span.length > 8 * 1024 * 1024 || urls.count < 2 {
+            for url in urls {
+                do {
+                    let (data, response) = try await fetchChunks(url, span: span)
+                    return (url, data, response)
+                } catch {
+                    try Task.checkCancellation()
+                }
+            }
+            return nil
+        }
+        return try await withThrowingTaskGroup(of: (URL, Data, HTTPURLResponse)?.self) { group in
+            for (index, url) in urls.enumerated() {
+                group.addTask {
+                    if index > 0 { try await Task.sleep(for: .milliseconds(700)) }
+                    do {
+                        let (data, response) = try await self.fetchChunks(url, span: span)
+                        return (url, data, response)
+                    } catch {
+                        try Task.checkCancellation()
+                        return nil
+                    }
+                }
+            }
+            while let candidate = try await group.next() {
+                if let candidate {
+                    group.cancelAll()
+                    return candidate
+                }
+            }
+            return nil
+        }
+    }
+
+    private func remember(_ url: URL, for urls: [URL]) {
+        if preferredCDN.count >= 72 { preferredCDN.removeAll(keepingCapacity: true) }
+        preferredCDN[urls] = url
+    }
+
+    private func fetchChunks(_ url: URL, span: ByteSpan) async throws -> (Data, HTTPURLResponse) {
+        let chunkSize: UInt64 = 32 * 1024 * 1024
+        guard span.length > chunkSize else { return try await fetchOne(url, span: span) }
+
+        var data = Data()
+        var response: HTTPURLResponse?
+        var remaining = span.length
+        var offset = span.offset
+        while remaining > 0 {
+            let length = min(chunkSize, remaining)
+            let (part, http) = try await fetchOne(url, span: ByteSpan(offset: offset, length: length))
+            data.append(part)
+            response = http
+            remaining -= length
+            if remaining > 0 { offset += length }
+        }
+        guard let response else { throw BiliError.invalid("无效的媒体分段") }
+        return (data, response)
+    }
+
     private func fetchOne(_ url:URL,span:ByteSpan) async throws -> (Data,HTTPURLResponse) {
-        var request = URLRequest(url:url)
+        var request = URLRequest(url: url, timeoutInterval: 8)
         request.setValue(span.header,forHTTPHeaderField:"Range")
         request.setValue("https://www.bilibili.com/",forHTTPHeaderField:"Referer")
         request.setValue("Mozilla/5.0",forHTTPHeaderField:"User-Agent")
-        let (data,response) = try await read(request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 206, data.count == Int(span.length), MediaTrack.allowedHost(http.url?.host) else {
+        let started = Date()
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await read(request)
+        } catch {
+            let issue = error as NSError
+            let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+            Self.diagnostics.error("Range failed host=\(url.host ?? "-", privacy: .public) offset=\(span.offset) length=\(span.length) ms=\(elapsed) domain=\(issue.domain, privacy: .public) code=\(issue.code)")
+            throw error
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        if elapsed >= 750 || status != 206 || data.count != Int(span.length) {
+            Self.diagnostics.notice("Range host=\(url.host ?? "-", privacy: .public) offset=\(span.offset) length=\(span.length) status=\(status) bytes=\(data.count) ms=\(elapsed)")
+        }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 206, data.count == Int(span.length), MediaTrack.allowedHost(http.url?.host),
+              let range = http.value(forHTTPHeaderField: "Content-Range"),
+              range.hasPrefix("bytes \(span.offset)-\(span.offset + span.length - 1)/") else {
             throw BiliError.invalid("片源不支持安全的分段读取，或播放地址已过期")
         }
         return (data,http)
     }
     private func fetchLive(_ url:URL,range:String?=nil) async throws -> (Data,HTTPURLResponse) {
         guard url.scheme=="https",MediaTrack.allowedHost(url.host) else {throw BiliError.invalid("不受信任的直播资源")}
-        var request=URLRequest(url:url)
+        var request=URLRequest(url:url, timeoutInterval: 8)
         request.setValue("https://live.bilibili.com/",forHTTPHeaderField:"Referer")
         request.setValue("Mozilla/5.0",forHTTPHeaderField:"User-Agent")
         if let range {guard range.hasPrefix("bytes=") else {throw BiliError.invalid("无效范围")};request.setValue(range,forHTTPHeaderField:"Range")}
@@ -173,42 +299,92 @@ actor MediaGateway {
             return result
         }.joined(separator:"\n")
     }
+    private func loadLivePlaylist(_ url: URL) async throws -> String {
+        let (data, response) = try await fetchLive(url)
+        guard data.count < 2 * 1024 * 1024,
+              let text = String(data: data, encoding: .utf8),
+              text.hasPrefix("#EXTM3U"),
+              !text.contains("com.apple.streamingkeydelivery") else {
+            throw BiliError.invalid("不支持的直播播放列表")
+        }
+        return try rewritePlaylist(text, base: response.url ?? url)
+    }
+
     func prepareLive(_ url:URL) async throws -> URL {
         try await start()
+        _ = try await loadLivePlaylist(url)
+        try Task.checkCancellation()
         let path=try liveRoute(url.absoluteString,base:url)
         return URL(string:"http://127.0.0.1:\(port)\(path)")!
     }
-    func prepare(video:MediaTrack,audio:MediaTrack?) async throws -> URL {
+    private func segments(for track: MediaTrack?) async throws -> [MediaSegment]? {
+        guard let track else { return nil }
+        let (index, _) = try await fetch(track.urls, span: track.index)
+        return try SegmentIndex.parse(index, absoluteOffset: track.index.offset)
+    }
+
+    func prepare(video:MediaTrack,audio:MediaTrack?,warmAt:Double?=nil) async throws -> URL {
         try await start()
-        // Keep prior routes alive until the old AVPlayerItem releases them, bounded per player session.
-        if resources.count > 90 { resources.removeAll() }
+        var prepared: [String: Resource] = [:]
         let generation = UUID().uuidString
         let base = "/\(token)/\(generation)"
         let videoPath = base + "/video.mp4"
-        let (videoIndex,_) = try await fetch(video.urls,span:video.index)
-        let videoSegments = try SegmentIndex.parse(videoIndex,absoluteOffset:video.index.offset)
-        resources[videoPath] = .media(video.urls)
-        resources[base+"/video.m3u8"] = .text(Data(SegmentIndex.playlist(track:video,segments:videoSegments,resource:videoPath).utf8))
+        async let videoSegmentsRequest = segments(for: video)
+        async let audioSegmentsRequest = segments(for: audio)
+        let (videoSegments, audioSegments) = try await (videoSegmentsRequest, audioSegmentsRequest)
+        guard let videoSegments else { throw BiliError.invalid("缺少视频索引") }
+        prepared[videoPath] = .media(video.urls)
+        prepared[base+"/video.m3u8"] = .text(Data(SegmentIndex.playlist(track:video,segments:videoSegments,resource:videoPath).utf8))
         var lines = ["#EXTM3U","#EXT-X-VERSION:7"]
         var codecs = video.codec
         var bandwidth = video.bandwidth
-        if let audio {
+        if let audio, let segments = audioSegments {
             let path = base+"/audio.mp4"
-            let (index,_) = try await fetch(audio.urls,span:audio.index)
-            let segments = try SegmentIndex.parse(index,absoluteOffset:audio.index.offset)
-            resources[path] = .media(audio.urls)
-            resources[base+"/audio.m3u8"] = .text(Data(SegmentIndex.playlist(track:audio,segments:segments,resource:path).utf8))
+            prepared[path] = .media(audio.urls)
+            prepared[base+"/audio.m3u8"] = .text(Data(SegmentIndex.playlist(track:audio,segments:segments,resource:path).utf8))
             lines.append("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"音轨\",DEFAULT=YES,AUTOSELECT=YES,URI=\"\(base)/audio.m3u8\"")
-            codecs += "," + audio.codec; bandwidth += audio.bandwidth
+            codecs += "," + audio.hlsCodec; bandwidth += audio.bandwidth
         }
         var attributes = "BANDWIDTH=\(max(1,bandwidth)),CODECS=\"\(codecs)\",RESOLUTION=\(video.width)x\(video.height)"
         if audio != nil { attributes += ",AUDIO=\"audio\"" }
-        if video.quality == 125 { attributes += ",VIDEO-RANGE=PQ" }
+        if video.quality == 125 || video.codec.hasPrefix("dvh1.05.") || video.codec.hasPrefix("dvhe.05.") { attributes += ",VIDEO-RANGE=PQ" }
         // Dolby Vision and immersive audio remain experimental until real-device validation.
         lines += ["#EXT-X-STREAM-INF:"+attributes,base+"/video.m3u8"]
-        resources[base+"/master.m3u8"] = .text(Data((lines.joined(separator:"\n")+"\n").utf8))
+        prepared[base+"/master.m3u8"] = .text(Data((lines.joined(separator:"\n")+"\n").utf8))
+        guard !stopped, !Task.isCancelled else { throw CancellationError() }
+        resources.merge(prepared) { _, new in new }
+        vodRoutes.append(Array(prepared.keys))
+        if vodRoutes.count > 18 {
+            for route in vodRoutes.removeFirst() { resources.removeValue(forKey: route) }
+        }
+        if let warmAt {
+            clearWarmRanges()
+            let ticket = warmGeneration
+            warmTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                async let videoWarm: Void = self.warm(video, segments: videoSegments, at: warmAt, ticket: ticket)
+                async let audioWarm: Void = self.warm(audio, segments: audioSegments ?? [], at: warmAt, ticket: ticket)
+                _ = await (videoWarm, audioWarm)
+            }
+        }
         return URL(string:"http://127.0.0.1:\(port)\(base)/master.m3u8")!
     }
+    private func warm(_ track: MediaTrack?, segments: [MediaSegment], at position: Double, ticket: UUID) async {
+        guard let track else { return }
+        var end = 0.0
+        let segment = segments.first {
+            end += $0.duration
+            return end > position
+        }
+        for span in [track.initialization, segment?.span].compactMap({ $0 }) {
+            guard warmGeneration == ticket, !Task.isCancelled else { return }
+            if span.length > 4 * 1024 * 1024 { continue }
+            guard let result = try? await fetch(track.urls, span: span),
+                  warmGeneration == ticket, !Task.isCancelled else { continue }
+            warmRanges[RangeKey(urls: track.urls, offset: span.offset, length: span.length)] = result
+        }
+    }
+
 }
 private final class OnceContinuation: @unchecked Sendable {
     private let lock = NSLock()

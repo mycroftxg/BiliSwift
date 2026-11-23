@@ -1,8 +1,8 @@
 {
-  "version": "0.6.2",
-  "build": 207,
-  "dmg": "BiliSwift-0.6.2.dmg",
-  "sha256": "1c6f8a29cdded467eb5f999100821bacd362e84f0b4223269b2495a2447004ef",
-  "notes": "修复全屏退出后的画面放大与侧栏遮挡；播放器底栏单行自适应，标题字号随窗口缩放并仅在滚动时渐隐。",
-  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.6.2"
+  "version": "0.7.2",
+  "build": 210,
+  "dmg": "BiliSwift-0.7.2.dmg",
+  "sha256": "0ffe089a9e036999f51149b392c023cba73a453566f77df5c043bfe05796e5e2",
+  "notes": "改善 TMDB 海报稳定性，新增令牌验证和启用状态，包含预加载和高级音轨优化。",
+  "page": "https://github.com/mycroftxg/BiliSwift/releases/tag/v0.7.2"
 }

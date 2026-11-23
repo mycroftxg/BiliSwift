@@ -3,7 +3,7 @@ import SwiftUI
 import HarborCore
 
 struct WatchRecord:Codable,Identifiable {
-    var id:String { video.bvid }
+    var id:String { "\(video.bvid)|\(cid)" }
     var video:Video, cid:Int, seconds:Double, updated:Date
 }
 @MainActor @Observable final class LocalLibrary {
@@ -18,10 +18,10 @@ struct WatchRecord:Codable,Identifiable {
             if FileManager.default.fileExists(atPath:url.path) { records=try JSONDecoder().decode([WatchRecord].self,from:Data(contentsOf:url)) }
         } catch { notice="本地历史记录读取失败：\(error.localizedDescription)" }
     }
-    func progress(_ bvid:String,cid:Int)->Double { records.first { $0.id==bvid && $0.cid==cid }?.seconds ?? 0 }
+    func progress(_ bvid:String,cid:Int)->Double { records.first { $0.video.bvid==bvid && $0.cid==cid }?.seconds ?? 0 }
     func save(video:Video,cid:Int,seconds:Double) {
         guard seconds.isFinite,seconds>=0 else { return }
-        records.removeAll { $0.id==video.bvid };records.insert(WatchRecord(video:video,cid:cid,seconds:seconds,updated:Date()),at:0)
+        records.removeAll { $0.video.bvid == video.bvid && $0.cid == cid };records.insert(WatchRecord(video:video,cid:cid,seconds:seconds,updated:Date()),at:0)
         records=Array(records.prefix(300))
         persist()
     }
@@ -59,15 +59,15 @@ enum Destination:String,CaseIterable,Identifiable {
     private func cacheKey(_ destination:Destination,keyword:String,channel:BiliChannel?)->String {
         "\(destination.rawValue)|\(keyword)|\(channel?.id ?? "")"
     }
-    func load(_ destination:Destination,keyword:String,account:AccountSession,library:LocalLibrary,more:Bool=false,channel:BiliChannel?=nil) async {
+    func load(_ destination:Destination,keyword:String,account:AccountSession,library:LocalLibrary,more:Bool=false,channel:BiliChannel?=nil,forceRefresh:Bool=false) async {
         let ticket:UUID
         let key=cacheKey(destination,keyword:keyword,channel:channel)
         if more { guard !loading,canLoadMore else { return }; ticket=generation }
         else {
-            feedFresh &+= 1; ticket=UUID();generation=ticket;videos=[];dynamics=[];page=1;canLoadMore=true;historyMax="0";historyAt="0";dynamicOffset=""
-            if let hit=snapshots[key],!hit.videos.isEmpty {
+            feedFresh &+= 1; ticket=UUID();generation=ticket;loading=false;error=nil;videos=[];dynamics=[];page=1;canLoadMore=true;historyMax="0";historyAt="0";dynamicOffset=""
+            if !forceRefresh,let hit=snapshots[key],!hit.videos.isEmpty,Date().timeIntervalSince(hit.date)<60 {
                 videos=hit.videos;canLoadMore=hit.hasMore;page=hit.page
-                if Date().timeIntervalSince(hit.date)<60 { return }
+                return
             }
         }
         loading=true;error=nil
@@ -104,7 +104,10 @@ enum Destination:String,CaseIterable,Identifiable {
             case .search:
                 if !keyword.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { result=try await BiliAPI.shared.search(keyword,page:page) }
             case .history:
-                if !account.loggedIn || localHistory { result=library.records.map(\.video) }
+                if !account.loggedIn || localHistory {
+                    var seen = Set<String>()
+                    result = library.records.map(\.video).filter { seen.insert($0.bvid).inserted }
+                }
                 else {
                     let data=try await BiliAPI.shared.request("/x/web-interface/history/cursor",["max":historyMax,"view_at":historyAt,"business":"archive","ps":"20"])
                     guard generation==ticket else { return }
@@ -134,12 +137,6 @@ enum Destination:String,CaseIterable,Identifiable {
                 canLoadMore = !dynamicOffset.isEmpty && !items.isEmpty
                 page += 1
                 return
-                result=data["items"].array.compactMap { item in
-                    let archive=item["modules"]["module_dynamic"]["major"]["archive"]
-                    guard !archive["bvid"].string.isEmpty else { return nil }
-                    let author=item["modules"]["module_author"]
-                    return Video(.object(["bvid":archive["bvid"],"aid":archive["aid"],"title":archive["title"],"pic":archive["cover"],"duration":archive["duration_text"],"author":author["name"],"mid":author["mid"]]))
-                }
             case .live: result=try await BiliAPI.shared.liveRooms(page:page);reportedMore = !result.isEmpty
             case .website,.shows,.channels,.messages,.following,.space: break
             }

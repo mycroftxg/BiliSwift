@@ -48,6 +48,7 @@ public struct Video: Identifiable, Codable, Hashable, Sendable {
     public let seasonID:Int?
     public let episodeID:Int?
     public let bvid: String, aid: Int, title: String, cover: String, author: String, mid: Int, duration: String, views: Int
+    public let hasViewCount: Bool?
     public init(_ j: JSON) {
         roomID=j["room_id"].int>0 ? j["room_id"].int:nil
         seasonID = j["season_id"].int>0 ? j["season_id"].int:nil
@@ -64,11 +65,14 @@ public struct Video: Identifiable, Codable, Hashable, Sendable {
         mid = j["owner"]["mid"].int == 0 ? (j["author"]["mid"].int==0 ? j["mid"].int:j["author"]["mid"].int) : j["owner"]["mid"].int
         let length = j["duration"].string.isEmpty ? j["length"].string : j["duration"].string
         duration = length
-        views = j["stat"]["view"].int == 0 ? j["play"].int : j["stat"]["view"].int
+        let counts = [j["stat"]["view"], j["cnt_info"]["play"], j["play"]]
+        let count = counts.lazy.compactMap { Int($0.string) }.first { $0 >= 0 }
+        views = count ?? 0
+        hasViewCount = count != nil
     }
     public init(season j:JSON) {
         roomID=nil;seasonID=j["season_id"].int;episodeID=nil
-        bvid="ss"+j["season_id"].string;aid=0;mid=0;views=0
+        bvid="ss"+j["season_id"].string;aid=0;mid=0;views=0;hasViewCount=false
         title=Creator.plain(j["title"].string.isEmpty ? j["season_title"].string:j["title"].string)
         cover=Self.secure(j["cover"].string.isEmpty ? j["first_ep"]["cover"].string:j["cover"].string)
         author=j["index_show"].string
@@ -80,7 +84,7 @@ public struct Video: Identifiable, Codable, Hashable, Sendable {
         title=Creator.plain(j["title"].string)
         cover=Self.secure(j["user_cover"].string.isEmpty ? (j["cover"].string.isEmpty ? j["system_cover"].string:j["cover"].string):j["user_cover"].string)
         author=Creator.plain(j["uname"].string);mid=j["uid"].int
-        duration="直播";views=j["online"].int
+        duration="直播";views=j["online"].int;hasViewCount=Int(j["online"].string) != nil
     }
     public static func episode(_ j:JSON,seasonID:Int,seasonTitle:String)->Video {
         .init(.object(["bvid":j["bvid"],"aid":j["aid"],"title":.string(seasonTitle+" · "+(j["show_title"].string.isEmpty ? j["title"].string+" "+j["long_title"].string:j["show_title"].string)),"pic":j["cover"],"author":.string("哔哩哔哩"),"duration":.number(j["duration"].double/1000),"season_id":.number(Double(seasonID)),"ep_id":j["id"]]))
@@ -96,9 +100,10 @@ public struct Video: Identifiable, Codable, Hashable, Sendable {
     public var isSeason: Bool { bvid.hasPrefix("ss") }
     public var durationLabel: String {
         if roomID != nil {return "直播"};if duration.contains(":") || isSeason && episodeID==nil { return duration }
-        let n = Int(duration) ?? 0; return String(format: "%d:%02d", n / 60, n % 60)
+        guard let n = Int(duration), n >= 0 else { return "" }; return String(format: "%d:%02d", n / 60, n % 60)
     }
-    public var viewLabel: String { if roomID != nil {return views>=10000 ? String(format:"%.1f 万人气",Double(views)/10000):"\(views) 人气"};if isSeason { return "哔哩哔哩" };return views >= 10000 ? String(format: "%.1f 万播放", Double(views) / 10000) : "\(views) 播放" }
+    public var metadataLabel: String { [author, viewLabel].filter { !$0.isEmpty }.joined(separator: " · ") }
+    public var viewLabel: String { guard hasViewCount ?? (views > 0) else { return "" }; if roomID != nil {return views>=10000 ? String(format:"%.1f 万人气",Double(views)/10000):"\(views) 人气"};if isSeason { return "哔哩哔哩" };return views >= 10000 ? String(format: "%.1f 万播放", Double(views) / 10000) : "\(views) 播放" }
 }
 public struct Episode: Identifiable, Sendable {
     public var id: Int { cid }
@@ -163,6 +168,14 @@ public struct MediaTrack: Identifiable, Sendable {
         if audio { return [30216: "64 kbps", 30232: "132 kbps", 30280: "192 kbps", 30250: "杜比全景声", 30251: "Hi-Res"][id] ?? "音轨 \(id)" }
         return [6:"240P",16:"360P",32:"480P",64:"720P",74:"720P 60",80:"1080P",112:"1080P 高码率",116:"1080P 60",120:"4K",125:"HDR",126:"杜比视界",127:"8K" ][id] ?? "画质 \(id)"
     }
+    public var hlsCodec: String {
+        guard audio else { return codec }
+        switch codec.lowercased() {
+        case "flac": return "fLaC"
+        case "ec+3", "ec-3", "eac3": return "ec-3"
+        default: return codec
+        }
+    }
     public var advanced: Bool { [125,126,30250,30251].contains(quality) }
 }
 public struct PlaybackManifest: Sendable {
@@ -170,10 +183,18 @@ public struct PlaybackManifest: Sendable {
     public let advertised: [String], preview: Bool, encrypted:Bool
     public init(_ j: JSON) {
         video = j["dash"]["video"].array.compactMap { try? MediaTrack($0, audio: false) }
-        var tracks = j["dash"]["audio"].array.compactMap { try? MediaTrack($0, audio: true) }
-        tracks += j["dash"]["dolby"]["audio"].array.compactMap { try? MediaTrack($0, audio: true) }
-        if let flac = try? MediaTrack(j["dash"]["flac"]["audio"], audio: true) { tracks.append(flac) }
-        audio = tracks
+        let dash = j["dash"]
+        let audioEntries = [dash["audio"], dash["dolby"]["audio"], dash["flac"]["audio"]].flatMap { value -> [JSON] in
+            switch value {
+            case .array(let entries): return entries
+            case .object: return [value]
+            default: return []
+            }
+        }
+        var seen = Set<String>()
+        audio = audioEntries.compactMap { try? MediaTrack($0, audio: true) }.filter {
+            seen.insert("\($0.quality)|\($0.hlsCodec)").inserted
+        }
         duration = j["timelength"].double / 1000
         advertised = j["support_formats"].array.map { $0["new_description"].string.isEmpty ? $0["display_desc"].string : $0["new_description"].string }
         encrypted=j["is_drm"].bool || j["drm_tech_type"].int>0

@@ -16,6 +16,10 @@ struct SettingsView:View {
     @State private var login=false
     @State private var clearHistory=false
     @State private var reset=false
+    @State private var tmdbDraft = ""
+    @State private var tmdbChecking = false
+    @State private var tmdbStatus: String?
+    @State private var tmdbFailed = false
     @Environment(UpdateController.self) private var updater
     var body:some View {
         NavigationSplitView {
@@ -31,6 +35,25 @@ struct SettingsView:View {
             .confirmationDialog("清除本机观看记录？云端历史不会被删除。",isPresented:$clearHistory,titleVisibility:.visible) { Button("清除本机记录",role:.destructive) { library.clear() } }
             .confirmationDialog("恢复所有偏好设置？账号和观看历史会保留。",isPresented:$reset,titleVisibility:.visible) { Button("恢复默认",role:.destructive) { preferences.reset() } }
     }
+    private func saveTMDBToken() async {
+        let token = tmdbDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tmdbChecking, !token.isEmpty else { return }
+        tmdbChecking = true
+        tmdbStatus = nil
+        defer { tmdbChecking = false }
+        do {
+            try await TMDBPosters.validate(token: token)
+            preferences.values.tmdbToken = token
+            preferences.values.tmdbEnabled = true
+            tmdbDraft = ""
+            tmdbFailed = false
+            tmdbStatus = "令牌已验证"
+        } catch {
+            tmdbFailed = true
+            tmdbStatus = error.localizedDescription
+        }
+    }
+
     @ViewBuilder private var fields:some View {
         @Bindable var prefs=preferences
         switch section ?? .account {
@@ -62,10 +85,24 @@ struct SettingsView:View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("界面") { Text("首页与详情页采用贴边大图和横向栏目；播放在当前窗口内展开。侧栏栏目可在“侧栏”中自定义。") }
-            Section("内容海报") {
-                TextField("TMDB API Token（可选）",text:$prefs.values.tmdbToken).textFieldStyle(.roundedBorder)
-                Text("填入 TMDB v4 Read Access Token 后，番剧/国创/电影/电视剧/纪录片会优先使用 TMDB 竖版海报；留空则显示哔哩哔哩官方封面。")
-                    .font(.caption).foregroundStyle(.secondary)
+            Section("TMDB 海报") {
+                Toggle("使用 TMDB 图片", isOn: $prefs.values.tmdbEnabled)
+                    .disabled(prefs.values.tmdbToken.isEmpty || tmdbChecking)
+                LabeledContent("状态", value: prefs.values.tmdbToken.isEmpty ? "未配置" : prefs.values.tmdbEnabled ? "已启用" : "已停用")
+                SecureField(prefs.values.tmdbToken.isEmpty ? "粘贴 API 读取访问令牌" : "粘贴新令牌以替换", text: $tmdbDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(tmdbChecking)
+                    .onSubmit { Task { await saveTMDBToken() } }
+                HStack {
+                    Button("验证并启用") { Task { await saveTMDBToken() } }
+                        .disabled(tmdbChecking || tmdbDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if tmdbChecking { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Link("获取令牌", destination: URL(string: "https://www.themoviedb.org/settings/api")!)
+                }
+                if let tmdbStatus {
+                    Text(tmdbStatus).font(.callout).foregroundStyle(tmdbFailed ? Color.red : Color.secondary)
+                }
             }
         case .playback:
             Section("默认播放") {

@@ -202,3 +202,72 @@ func nativeCreatorReadOrExplicitVerificationRequirement() async throws {
     let collections=try await api.creatorCollections(mid)
     #expect(collections["items_lists"]["page"]["total"].int>=0)
 }
+
+@Test func dynamicCommentTargetUsesResourceTypeAndExactID() throws {
+    let dynamic = try #require(DynamicItem(.object([
+        "id_str": .string("1175790152486748165"),
+        "basic": .object([
+            "comment_type": .number(11),
+            "comment_id_str": .string("1175790152486748167")
+        ])
+    ])))
+    #expect(dynamic.commentTarget?.type == 11)
+    #expect(dynamic.commentTarget?.oid == "1175790152486748167")
+    #expect(DynamicItem(.object(["id_str": .string(dynamic.id)]))?.commentTarget == nil)
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["HARBOR_LIVE_TESTS"] == "1"))
+func publicDynamicCommentRead() async throws {
+    let api = BiliAPI()
+    let item = try #require(DynamicItem(.object([
+        "id_str": .string("1175790152486748165"),
+        "basic": .object(["comment_type": .number(11), "comment_id_str": .string("386897047")])
+    ])))
+    let target = try #require(item.commentTarget)
+    let comments: JSON
+    do {
+        comments = try await api.dynamicComments(target)
+    } catch {
+        comments = try await api.dynamicComments(target, page: 1)
+    }
+    #expect(!comments["replies"].array.isEmpty)
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["HARBOR_LIVE_TESTS"] == "1"))
+func publicVideoCommentOrders() async throws {
+    let api = BiliAPI()
+    for order in BiliAPI.CommentOrder.allCases {
+        let page = try await api.sortedComments(oid: "170001", order: order)
+        #expect(page["cursor"]["mode"].int == order.rawValue)
+        #expect(!page["replies"].array.isEmpty)
+    }
+}
+
+@Test func videoMetadataDistinguishesUnknownCountsAndRealZero() {
+    let partial = Video(.object(["author": .string("作者")]))
+    #expect(partial.metadataLabel == "作者")
+    #expect(partial.durationLabel.isEmpty)
+    let zero = Video(.object(["stat": .object(["view": .number(0)]), "play": .number(100)]))
+    #expect(zero.viewLabel == "0 播放")
+    let favorite = Video(.object(["cnt_info": .object(["play": .number(123)])]))
+    #expect(favorite.viewLabel == "123 播放")
+}
+
+@Test func advancedAudioAcceptsObjectAndArrayAndNormalizesHLSCodecs() {
+    func track(_ id: Int, _ codec: String) -> JSON {
+        .object(["id": .number(Double(id)), "codecs": .string(codec),
+                 "baseUrl": .string("https://cdn.bilivideo.com/audio.m4s"),
+                 "SegmentBase": .object(["Initialization": .string("0-99"), "indexRange": .string("100-199")])])
+    }
+    let atmos = track(30250, "ec+3")
+    let flac = track(30251, "flac")
+    let manifest = PlaybackManifest(.object(["dash": .object([
+        "audio": .array([track(30250, "ec-3")]),
+        "dolby": .object(["audio": atmos]),
+        "flac": .object(["audio": .array([flac])])
+    ])]))
+    #expect(manifest.audio.map(\.quality) == [30250, 30251])
+    #expect(manifest.audio.map(\.hlsCodec) == ["ec-3", "fLaC"])
+    let objectOnly = PlaybackManifest(.object(["dash": .object(["dolby": .object(["audio": atmos])])]))
+    #expect(objectOnly.audio.first?.hlsCodec == "ec-3")
+}

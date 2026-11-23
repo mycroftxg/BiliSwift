@@ -25,8 +25,10 @@ struct PreferenceValues:Codable,Equatable {
     var saveHistory=true
     var channelIDs=BiliChannel.defaultIDs
     var tmdbToken=""
+    var tmdbEnabled = false
+    var activeTMDBToken: String { tmdbEnabled ? tmdbToken : "" }
     init() {}
-    enum CodingKeys:String,CodingKey {case appearance,quality,preferredFormat,codec,volume,rate,resume,autoPlay,backgroundPlayback,autoHide,lowPowerMode,hideDelay,updateSource,danmaku,danmakuOpacity,danmakuSize,danmakuSpeed,danmakuDensity,subtitleSize,syncHistory,saveHistory,channelIDs,tmdbToken}
+    enum CodingKeys:String,CodingKey {case appearance,quality,preferredFormat,codec,volume,rate,resume,autoPlay,backgroundPlayback,autoHide,lowPowerMode,hideDelay,updateSource,danmaku,danmakuOpacity,danmakuSize,danmakuSpeed,danmakuDensity,subtitleSize,syncHistory,saveHistory,channelIDs,tmdbToken,tmdbEnabled}
     init(from decoder:Decoder) throws {
         let c=try decoder.container(keyedBy:CodingKeys.self)
         appearance=try c.decodeIfPresent(String.self,forKey:.appearance) ?? "system"
@@ -52,6 +54,7 @@ struct PreferenceValues:Codable,Equatable {
         saveHistory=try c.decodeIfPresent(Bool.self,forKey:.saveHistory) ?? true
         channelIDs=try c.decodeIfPresent([String].self,forKey:.channelIDs) ?? BiliChannel.defaultIDs
         tmdbToken=try c.decodeIfPresent(String.self,forKey:.tmdbToken) ?? ""
+        tmdbEnabled = try c.decodeIfPresent(Bool.self, forKey: .tmdbEnabled) ?? !tmdbToken.isEmpty
     }
 
 }

@@ -2,8 +2,10 @@ import SwiftUI
 import AVFoundation
 import AppKit
 import HarborCore
+import OSLog
 
 @MainActor @Observable final class PlaybackController {
+    private static let trackLog = Logger(subsystem: "app.biliswift.mac", category: "AudioVideoSwitch")
     @ObservationIgnored let player=AVPlayer()
     @ObservationIgnored private var gateway=MediaGateway()
     @ObservationIgnored private var monitor:Task<Void,Never>?
@@ -36,10 +38,10 @@ import HarborCore
         playing=true
     }
     private var lastPlayableAudio:MediaTrack?
-    struct LiveMessage:Identifiable,Sendable,Equatable { public let id:Int;public let user:String;public let text:String }
+    @ObservationIgnored private var switchingTracks: UUID?
+    struct LiveMessage:Identifiable,Sendable,Equatable { public let id:Int;public let user:String;public let text:String;public let emotes:[String:String] }
     var liveMessages:[LiveMessage]=[]
     var liveChatStatus="正在连接直播间聊天…"
-    var videoComments:[JSON]=[]
     var commentsAid=0
     var commentsOpen=false
     var showNextPreview=false
@@ -53,13 +55,13 @@ import HarborCore
         guard let index=currentEpisodeIndex,index+1<episodes.count else { return nil }
         return episodes[index+1]
     }
-    var videoTint:Color?
+    private var liveRecovery: UUID?
     private var liveURLs:[URL]=[]
     private var liveURLIndex=0
     @ObservationIgnored private var liveChat:LiveChat?
-    @ObservationIgnored private var liveChatTask:Task<Void,Never>?
     @ObservationIgnored private var liveTicker:Task<Void,Never>?
-    private var liveDanmaku:[Danmaku]=[]
+    @ObservationIgnored private var liveDanmaku:[Danmaku]=[]
+    @ObservationIgnored private var pendingLiveMessages:[LiveMessage]=[]
     private var liveSequence=0
     var liveQualities:[LiveQuality]=[]
     var liveQuality:Int=0
@@ -98,6 +100,62 @@ import HarborCore
     }
     var audioChoices:[MediaTrack] { (manifest?.audio ?? []).sorted { $0.bandwidth > $1.bandwidth } }
     var subtitle:String { subtitles.first { $0.from <= seconds && seconds < $0.to }?.text ?? "" }
+    private struct PreloadKey: Equatable {
+        let bvid: String
+        let cid: Int
+        let episode: Int?
+        let quality: String
+        let codec: String
+        let format: String
+    }
+
+    private struct PreparedPlayback {
+        let manifest: PlaybackManifest
+        let video: MediaTrack
+        let audio: MediaTrack
+        let url: URL
+    }
+
+    @ObservationIgnored private var preload: (key: PreloadKey, created: ContinuousClock.Instant, task: Task<PreparedPlayback, Error>)?
+
+    private func preloadKey(_ video: Video, cid: Int) -> PreloadKey {
+        let values = preferences?.values
+        return PreloadKey(bvid: video.bvid, cid: cid, episode: video.episodeID,
+                          quality: values?.quality ?? "balanced", codec: values?.codec ?? "auto",
+                          format: values?.preferredFormat ?? "auto")
+    }
+
+    func cancelPreload() {
+        preload?.task.cancel()
+        preload = nil
+        Task { await gateway.clearWarmRanges() }
+    }
+
+    func preloadVideo(_ video: Video, cid: Int, position: Double) {
+        guard video.roomID == nil, cid > 0, !loading, !playing,
+              preferences?.values.lowPowerMode != true,
+              !(self.video?.bvid == video.bvid && self.cid == cid && manifest != nil) else { return }
+        let key = preloadKey(video, cid: cid)
+        if let preload, preload.key == key, preload.created.duration(to: .now) < .seconds(45) { return }
+        preload?.task.cancel()
+        preload = (key, .now, Task(priority: .utility) { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.preparePlayback(video, cid: cid, warmAt: position)
+        })
+    }
+
+    private func preparePlayback(_ video: Video, cid: Int, warmAt: Double? = nil) async throws -> PreparedPlayback {
+        let data = try await BiliAPI.shared.playback(video.bvid, cid: cid, episodeID: video.episodeID)
+        try Task.checkCancellation()
+        guard !data.encrypted else { throw BiliError.invalid("此片源需要受保护的官方播放链路，当前原生播放器尚不支持。") }
+        guard let chosen = compatibleVideo(data.video) else {
+            throw BiliError.invalid("此内容未返回可适配的 DASH 片源，可在官方网页检查权限。")
+        }
+        guard let audio = compatibleAudio(data.audio) else { throw BiliError.invalid("片源未返回兼容音轨。") }
+        let url = try await gateway.prepare(video: chosen, audio: audio, warmAt: warmAt)
+        return PreparedPlayback(manifest: data, video: chosen, audio: audio, url: url)
+    }
+
     func open(video:Video,cid:Int,library:LocalLibrary,episodes:[Episode]=[]) async {
         stop();minimized=false;miniBarHidden=false;self.episodes=episodes;self.video=video;self.cid=cid;self.library=library;libraryRef=library;error=nil;notice=nil;outputStatus="正在准备";showNextPreview=false;nextCountdown=nil
         fallbackAttempted=false;refreshAttempted=false;generation=UUID();let ticket=generation
@@ -108,27 +166,47 @@ import HarborCore
         }
         do {
             if let roomID=video.roomID {
+                cancelPreload()
                 liveRoomID=roomID
                 let stream=try await BiliAPI.shared.liveStream(roomID)
+                guard ticket == generation else { return }
                 liveQualities=stream.qualities;liveQuality=stream.current
                 liveURLs=stream.urls;liveURLIndex=0
-                let url=try await gateway.prepareLive(stream.url)
+                var preparedURL: URL?
+                for (index, candidate) in stream.urls.enumerated() {
+                    preparedURL = try? await gateway.prepareLive(candidate)
+                    guard ticket == generation else { return }
+                    if preparedURL != nil { liveURLIndex = index; break }
+                }
+                guard let url = preparedURL else { throw BiliError.invalid("直播线路暂不可用") }
                 guard ticket==generation else {return}
+                commentsOpen = true
                 startLiveChat(roomID:roomID)
-                player.replaceCurrentItem(with:AVPlayerItem(url:url));player.volume=Float(volume);player.play();playing=true
+                player.volume = Float(volume)
+                replaceLiveItem(url)
                 notice="直播播放 · 暂不支持进度拖动";startMonitor(ticket:ticket);return
             }
-            let data=try await BiliAPI.shared.playback(video.bvid,cid:cid,episodeID:video.episodeID)
-            guard ticket==generation else { return }
-            guard !data.encrypted else { throw BiliError.invalid("此片源需要受保护的官方播放链路，当前原生播放器尚不支持。") }
-            manifest=data;duration=data.duration
-            guard let chosen=compatibleVideo(data.video) else { throw BiliError.invalid("此内容未返回可适配的 DASH 片源，可在官方网页检查权限。") }
-            let audio=compatibleAudio(data.audio)
-            if audio==nil { throw BiliError.invalid("片源未返回兼容音轨，暂不进行无声播放。") }
-            let resume=(preferences?.values.resume ?? true) ? library.progress(video.bvid,cid:cid):0
-            guard ticket==generation else { return }
-            // 先起播，云端续播信息在后台补齐，避免多一次网络往返拖慢加载。
-            try await configure(video:chosen,audio:audio,position:resume,ticket:ticket)
+            let cached = preload
+            preload = nil
+            let prepared: PreparedPlayback
+            if let cached, cached.key == preloadKey(video, cid: cid),
+               cached.created.duration(to: .now) < .seconds(45) {
+                do { prepared = try await cached.task.value }
+                catch {
+                    guard ticket == generation else { return }
+                    try Task.checkCancellation()
+                    prepared = try await preparePlayback(video, cid: cid)
+                }
+            } else {
+                cached?.task.cancel()
+                prepared = try await preparePlayback(video, cid: cid)
+            }
+            guard ticket == generation, !Task.isCancelled else { return }
+            manifest = prepared.manifest
+            duration = prepared.manifest.duration
+            let resume = (preferences?.values.resume ?? true) ? library.progress(video.bvid, cid: cid) : 0
+            try await configure(video: prepared.video, audio: prepared.audio, position: resume,
+                                ticket: ticket, preparedURL: prepared.url)
             guard ticket==generation else { return }
             startMonitor(ticket:ticket)
             if resume==0,(preferences?.values.resume ?? true) {
@@ -141,10 +219,7 @@ import HarborCore
                 }
             }
             Task { await self.loadTimedText(bvid:video.bvid,cid:cid,ticket:ticket) }
-            Task { await self.loadComments(video:video) }
-            Task {
-                if let color=await RemoteImageStore.shared.averageColor(video.cover) { await MainActor.run { self.videoTint=Color(nsColor:color) } }
-            }
+            commentsAid = video.aid
         } catch is CancellationError {
             if ticket==generation { loading=false }
         } catch { if ticket==generation { self.error=error.localizedDescription;loading=false;outputStatus="未能播放" } }
@@ -161,6 +236,7 @@ import HarborCore
         if preference=="hevc",codec.hasPrefix("hvc1") || codec.hasPrefix("hev1") { return -1 }
         if preference != "auto",codec.hasPrefix(preference) { return -1 }
         if codec.hasPrefix("avc1") { return 0 }
+        if codec.hasPrefix("dvh1") || codec.hasPrefix("dvhe") { return 1 }
         if codec.hasPrefix("hvc1") || codec.hasPrefix("hev1") { return 1 }
         if codec.hasPrefix("av01") { return 2 };return 3
     }
@@ -193,9 +269,11 @@ import HarborCore
     private func compatibleAudio(_ tracks:[MediaTrack])->MediaTrack? {
         tracks.filter { !$0.advanced && $0.codec.hasPrefix("mp4a") }.max { $0.bandwidth < $1.bandwidth }
     }
-    private func configure(video:MediaTrack,audio:MediaTrack?,position:Double,ticket:UUID) async throws {
+    private func configure(video:MediaTrack,audio:MediaTrack?,position:Double,ticket:UUID,preparedURL:URL?=nil) async throws {
         loading=true
-        let url=try await gateway.prepare(video:video,audio:audio)
+        let url: URL
+        if let preparedURL { url = preparedURL }
+        else { url = try await gateway.prepare(video: video, audio: audio) }
         guard generation==ticket,!Task.isCancelled else { return }
         let item=AVPlayerItem(url:url)
         player.replaceCurrentItem(with:item);selectedVideo=video;selectedAudio=audio;ended=false
@@ -205,76 +283,111 @@ import HarborCore
         player.playImmediately(atRate:rate);playing=true
         outputStatus="等待系统解码"
     }
-    /// 直播弹幕：WebSocket 收到的消息以当前播放时间为时间轴，1 秒合并刷新到弹幕层。
+    /// 直播弹幕使用播放时间，聊天和画面弹幕都按批次刷新。
     private func startLiveChat(roomID:Int) {
         LiveLog.write("startLiveChat room=\(roomID)")
         stopLiveChat()
         liveDanmaku=[];liveSequence=0
         liveMessages=[]
         liveChatStatus="正在连接直播间聊天…"
-        let chat=LiveChat(onStatus:{ [weak self] in self?.liveChatStatus=$0 }) { [weak self] user,text,color in
+        let chat=LiveChat(onStatus:{ [weak self] in self?.liveChatStatus=$0 }) { [weak self] user,text,color,emotes in
             guard let self else { return }
             self.liveDanmaku.append(Danmaku(id:self.liveSequence,time:self.seconds,text:text,mode:1,color:color))
-            self.liveMessages.append(LiveMessage(id:self.liveSequence,user:user,text:text))
+            self.pendingLiveMessages.append(LiveMessage(id:self.liveSequence,user:user,text:text,emotes:emotes))
             self.liveSequence &+= 1
             if self.liveDanmaku.count>240 { self.liveDanmaku.removeFirst(self.liveDanmaku.count-240) }
-            if self.liveMessages.count>300 { self.liveMessages.removeFirst(self.liveMessages.count-300) }
+            if self.pendingLiveMessages.count > 300 { self.pendingLiveMessages.removeFirst() }
         }
         liveChat=chat
-        liveChatTask=Task { [weak self] in
-            do { try await chat.connect(roomID:roomID) }
-            catch {
-                guard let self,!Task.isCancelled,self.liveChat === chat else { return }
-                self.liveChatStatus="直播间聊天连接失败：\(error.localizedDescription)"
-            }
-        }
+        chat.connect(roomID: roomID)
         liveTicker=Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for:.seconds(1))
-                guard let self,self.liveChat != nil else { return }
-                self.danmaku=self.liveDanmaku
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled, let self,self.liveChat != nil else { return }
+                if !self.pendingLiveMessages.isEmpty {
+                    self.liveMessages = Array((self.liveMessages + self.pendingLiveMessages).suffix(300))
+                    self.pendingLiveMessages.removeAll(keepingCapacity: true)
+                }
+                if self.danmaku.last?.id != self.liveDanmaku.last?.id { self.danmaku = self.liveDanmaku }
             }
         }
     }
     private func stopLiveChat() {
-        liveChatTask?.cancel();liveChatTask=nil
         liveChat?.disconnect();liveChat=nil
         liveTicker?.cancel();liveTicker=nil
-        liveDanmaku=[];liveMessages=[];liveURLs=[];liveURLIndex=0
+        liveDanmaku=[];liveMessages=[];pendingLiveMessages=[]
     }
     /// 直播源失效时换下一个 CDN/编码候选，全部失败再重新取流。
     func retryLive() async {
-        guard liveRoomID != nil else { return }
+        guard let roomID = liveRoomID, liveRecovery == nil else { return }
+        let ticket = generation
+        liveRecovery = ticket
+        defer { if liveRecovery == ticket { liveRecovery = nil } }
         while liveURLIndex+1<liveURLs.count {
             liveURLIndex+=1
-            if let url=try? await gateway.prepareLive(liveURLs[liveURLIndex]) {
-                player.replaceCurrentItem(with:AVPlayerItem(url:url));player.playImmediately(atRate:rate);playing=true
+            let fallback = try? await gateway.prepareLive(liveURLs[liveURLIndex])
+            guard ticket == generation else { return }
+            if let url = fallback {
+                replaceLiveItem(url)
                 notice="直播已切换备用线路";return
             }
         }
-        if let roomID=liveRoomID,let stream=try? await BiliAPI.shared.liveStream(roomID) {
-            liveURLs=stream.urls;liveURLIndex=0;liveQualities=stream.qualities;liveQuality=stream.current
-            if let url=try? await gateway.prepareLive(stream.url) {
-                player.replaceCurrentItem(with:AVPlayerItem(url:url));player.playImmediately(atRate:rate);playing=true
-                notice="直播已重新连接";return
+        if let stream=try? await BiliAPI.shared.liveStream(roomID) {
+            guard ticket == generation else { return }
+            liveURLs = stream.urls
+            for (index, source) in liveURLs.enumerated() {
+                let prepared = try? await gateway.prepareLive(source)
+                guard ticket == generation else { return }
+                if let prepared {
+                    liveURLIndex = index
+                    liveQualities = stream.qualities
+                    liveQuality = stream.current
+                    replaceLiveItem(prepared)
+                    notice = "直播已重新连接"
+                    return
+                }
             }
         }
+        guard ticket == generation else { return }
         notice="直播连接失败，请稍后点重试"
     }
     /// 直播画质切换：重新取流并替换播放项，失败时保留当前直播。
     func chooseLiveQuality(_ qn:Int) async {
-        guard let roomID=liveRoomID else { return }
-        let ticket=generation
+        guard let roomID=liveRoomID, liveRecovery == nil else { return }
+        let ticket = generation
+        liveRecovery = ticket
+        defer { if liveRecovery == ticket { liveRecovery = nil } }
         let keepLabel=liveQualities.first { $0.id==liveQuality }?.label ?? "当前画质"
         do {
             let stream=try await BiliAPI.shared.liveStream(roomID,qn:qn)
-            let url=try await gateway.prepareLive(stream.url)
-            guard ticket==generation else { return }
-            liveQualities=stream.qualities;liveQuality=stream.current
-            player.replaceCurrentItem(with:AVPlayerItem(url:url));player.playImmediately(atRate:rate);playing=true
-            let target=stream.qualities.first { $0.id==qn }?.label ?? "直播画质"
-            notice="已更改为 \(target)"
-        } catch { notice="更改失败，目前仍以 \(keepLabel) 播放" }
+            guard ticket == generation else { return }
+            for (index, source) in stream.urls.enumerated() {
+                let prepared = try? await gateway.prepareLive(source)
+                guard ticket == generation else { return }
+                if let prepared {
+                    liveURLs = stream.urls
+                    liveURLIndex = index
+                    liveQualities = stream.qualities
+                    liveQuality = stream.current
+                    replaceLiveItem(prepared)
+                    let target = stream.qualities.first { $0.id == qn }?.label ?? "直播画质"
+                    notice = "已更改为 \(target)"
+                    return
+                }
+            }
+            throw BiliError.invalid("所选画质暂无可用直播线路")
+        } catch {
+            guard ticket == generation else { return }
+            notice="更改失败，目前仍以 \(keepLabel) 播放" }
+    }
+    private func replaceLiveItem(_ url: URL) {
+        seconds = 0
+        rate = 1
+        liveDanmaku = []
+        danmaku = []
+        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        player.playImmediately(atRate: 1)
+        playing = true
     }
     private func shortLabel(_ label:String)->String {
         if let range=label.range(of:" 高码率") { return String(label[..<range.lowerBound])+"+" }
@@ -282,41 +395,96 @@ import HarborCore
         if let range=label.range(of:" ") { return String(label[..<range.lowerBound]) }
         return label
     }
-    func choose(video:MediaTrack?=nil,audio:MediaTrack?=nil) async {
-        guard let current=video ?? selectedVideo else { return }
-        if [125,126].contains(current.quality),!hdrEligible {
-            notice="当前系统未报告可用的 HDR 输出链路，画面将按 SDR 呈现。"
+    func choose(video requestedVideo: MediaTrack? = nil, audio requestedAudio: MediaTrack? = nil) async {
+        guard switchingTracks == nil, let source = video, source.roomID == nil,
+              let original = player.currentItem, let originalVideo = selectedVideo else { return }
+        let targetVideo = requestedVideo ?? originalVideo
+        let targetAudio = requestedAudio ?? selectedAudio
+        guard targetVideo.id != originalVideo.id || targetAudio?.id != selectedAudio?.id else { return }
+
+        let ticket = generation
+        switchingTracks = ticket
+        defer { if switchingTracks == ticket { switchingTracks = nil } }
+        let sourceCID = cid
+        let kind = requestedAudio == nil ? "画质" : "音轨"
+        let label = requestedAudio?.label ?? shortLabel(targetVideo.label)
+        notice = "正在切换\(kind)：\(label)"
+
+        for attempt in 0..<2 {
+            var originalPosition = CMTime.invalid
+            var wasPlaying = false
+            var stage = "manifest"
+            do {
+                var nextVideo = targetVideo
+                var nextAudio = targetAudio
+                if attempt == 1 {
+                    let refreshed = try await BiliAPI.shared.playback(source.bvid, cid: sourceCID,
+                        quality: targetVideo.quality, episodeID: source.episodeID)
+                    guard generation == ticket else { return }
+                    guard !refreshed.encrypted,
+                          let candidate = refreshed.video.first(where: { $0.id == targetVideo.id })
+                            ?? refreshed.video.first(where: { $0.quality == targetVideo.quality }) else {
+                        throw BiliError.invalid("未返回所选画质")
+                    }
+                    nextVideo = candidate
+                    if let targetAudio {
+                        guard let candidate = refreshed.audio.first(where: { $0.quality == targetAudio.quality && $0.hlsCodec == targetAudio.hlsCodec }) else {
+                            throw BiliError.invalid("未返回所选音轨")
+                        }
+                        nextAudio = candidate
+                    }
+                }
+                stage = "playlist"
+                let url = try await gateway.prepare(video: nextVideo, audio: nextAudio)
+                guard generation == ticket else { return }
+                try Task.checkCancellation()
+                originalPosition = player.currentTime()
+                wasPlaying = player.rate > 0 || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                stage = "readiness"
+                let item = AVPlayerItem(url: url)
+                player.replaceCurrentItem(with: item)
+                loading = true
+                let clock = ContinuousClock()
+                let deadline = clock.now.advanced(by: .seconds(nextAudio?.advanced == true ? 12 : 8))
+                while item.status == .unknown, clock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(100))
+                    guard generation == ticket, player.currentItem === item else { return }
+                }
+                guard item.status == .readyToPlay else {
+                    throw item.error ?? BiliError.invalid("片源加载超时")
+                }
+                if originalPosition.seconds.isFinite, originalPosition.seconds > 0 {
+                    stage = "seek"
+                    let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+                    let completed = await player.seek(to: originalPosition, toleranceBefore: tolerance, toleranceAfter: tolerance)
+                    guard completed else { throw BiliError.invalid("新音视频轨道未能恢复播放进度") }
+                }
+                guard generation == ticket, player.currentItem === item else { return }
+                try Task.checkCancellation()
+                selectedVideo = nextVideo
+                selectedAudio = nextAudio
+                ended = false
+                loading = false
+                if wasPlaying { player.playImmediately(atRate: rate) }
+                playing = wasPlaying
+                notice = "已切换\(kind)：\(label)"
+                return
+            } catch {
+                guard generation == ticket else { return }
+                let failure = error as NSError
+                Self.trackLog.error("Switch failed stage=\(stage, privacy: .public) attempt=\(attempt + 1) video=\(targetVideo.quality) audio=\(targetAudio?.quality ?? 0) codec=\(targetAudio?.hlsCodec ?? "-", privacy: .public) domain=\(failure.domain, privacy: .public) code=\(failure.code)")
+                if player.currentItem !== original {
+                    player.replaceCurrentItem(with: original)
+                    if originalPosition.seconds.isFinite { await player.seek(to: originalPosition) }
+                    guard generation == ticket else { return }
+                    if wasPlaying { player.playImmediately(atRate: rate) }
+                    playing = wasPlaying
+                    loading = false
+                }
+                if Task.isCancelled { return }
+            }
         }
-        let ticket=generation
-        let previous=(video:selectedVideo,audio:selectedAudio,position:seconds)
-        let keepLabel=shortLabel(audio != nil ? (previous.audio?.label ?? "当前音轨") : (previous.video?.label ?? "当前画质"))
-        do { try await configure(video:current,audio:audio ?? selectedAudio,position:seconds,ticket:ticket) }
-        catch {
-            // 目标片源取流失败时保留原来的播放，不要卡在失败状态。
-            loading=false
-            notice="更改失败，目前仍以 \(keepLabel) 播放"
-            if let old=previous.video,old.id != current.id { try? await configure(video:old,audio:previous.audio,position:previous.position,ticket:generation) }
-            return
-        }
-        if await switchFailed(ticket:ticket) {
-            notice="更改失败，目前仍以 \(keepLabel) 播放"
-            if let old=previous.video,old.id != current.id { try? await configure(video:old,audio:previous.audio,position:previous.position,ticket:generation) }
-            else { await recover(BiliError.invalid("片源无法解码"),ticket:generation) }
-        } else {
-            notice="已更改为 \(shortLabel(current.label))"
-        }
-    }
-    /// 切换后短暂观察新 item；只有明确 failed 才算失败，慢网络交给 monitor 继续等。
-    private func switchFailed(ticket:UUID) async -> Bool {
-        guard let item=player.currentItem else { return false }
-        var waited=0.0
-        while waited<8 {
-            if generation != ticket || Task.isCancelled { return false }
-            if item.status == .readyToPlay { return false }
-            if item.status == .failed { return true }
-            try? await Task.sleep(for:.milliseconds(200));waited += 0.2
-        }
-        return false
+        notice = "\(kind)切换失败：\(label)。已恢复原片源。"
     }
     private func startMonitor(ticket:UUID) {
         monitor?.cancel()
@@ -325,9 +493,10 @@ import HarborCore
             while !Task.isCancelled {
                 do { try await Task.sleep(for:.milliseconds(300)) } catch { return }
                 guard let self,self.generation==ticket,let item=self.player.currentItem else { return }
+                if self.switchingTracks != nil { continue }
                 let time=self.player.currentTime().seconds
-                if time.isFinite { self.seconds=max(0,time) }
-                let length=item.duration.seconds;if length.isFinite,length>0 { self.duration=length }
+                if time.isFinite, self.seconds != max(0, time) { self.seconds = max(0, time) }
+                let length=item.duration.seconds;if length.isFinite, length > 0, self.duration != length { self.duration = length }
                 if self.nextEpisode != nil,length.isFinite,length>0 {
                     let remaining=length-self.seconds
                     if remaining<=20,!self.showNextPreview { withAnimation(.snappy(duration:0.25)) { self.showNextPreview=true } }
@@ -335,7 +504,8 @@ import HarborCore
                     // 最后 5 秒显示倒计时，数字与剩余秒数对齐，归零即接下一集。
                     self.nextCountdown = (remaining>0.2 && remaining<=5) ? max(1,Int(ceil(remaining))) : nil
                 }
-                self.playing=self.player.timeControlStatus == .playing
+                let isPlaying = self.player.timeControlStatus == .playing
+                if self.playing != isPlaying { self.playing = isPlaying }
                 NowPlayingCenter.shared.update(from:self)
                 self.loading=self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate || item.status == .unknown
                 if item.status == .readyToPlay {
@@ -345,7 +515,9 @@ import HarborCore
                     self.outputStatus=advanced ? "系统已就绪 · 高级输出待设备验证" : "系统已就绪 · 兼容播放"
                 } else { unreadyTicks += 1 }
                 if self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate { stallTicks += 1 } else { stallTicks=0 }
-                if item.status == .failed || unreadyTicks>100 || stallTicks>120 {
+                let startupLimit = self.liveRoomID == nil ? 40 : 100
+                let stallLimit = self.liveRoomID == nil ? 40 : 120
+                if item.status == .failed || unreadyTicks >= startupLimit || stallTicks >= stallLimit {
                     await self.recover(item.error ?? BiliError.invalid("媒体加载超时"),ticket:ticket)
                     unreadyTicks=0;stallTicks=0
                     if self.error != nil { return }
@@ -370,9 +542,31 @@ import HarborCore
     private func recover(_ failure:Error,ticket:UUID) async {
         guard ticket==generation else { return }
         if liveRoomID != nil { await retryLive();return }
-        if let remembered=lastPlayableVideo,remembered.id != selectedVideo?.id {
+        if let remembered=lastPlayableVideo, remembered.id != selectedVideo?.id || lastPlayableAudio?.id != selectedAudio?.id {
             do { try await configure(video:remembered,audio:lastPlayableAudio,position:seconds,ticket:ticket);notice="已回到上一组可播放的片源。";return }
             catch { /* 继续走兼容回退 */ }
+        }
+        if !refreshAttempted, let video, let selectedVideo,
+           selectedVideo.advanced || selectedVideo.quality >= 120 || selectedAudio?.advanced == true {
+            refreshAttempted = true
+            let audioID = selectedAudio?.id
+            let position = seconds
+            do {
+                notice = "正在重新连接当前画质和音轨…"
+                let refreshed = try await BiliAPI.shared.playback(video.bvid, cid: cid,
+                    quality: selectedVideo.quality, episodeID: video.episodeID)
+                guard ticket == generation, !Task.isCancelled else { return }
+                guard !refreshed.encrypted else { throw failure }
+                manifest = refreshed
+                guard let sameVideo = refreshed.video.first(where: { $0.id == selectedVideo.id })
+                    ?? refreshed.video.first(where: { $0.quality == selectedVideo.quality }) else { throw failure }
+                let sameAudio = refreshed.audio.first { $0.id == audioID }
+                if audioID != nil, sameAudio == nil { throw failure }
+                try await configure(video: sameVideo, audio: sameAudio, position: position, ticket: ticket)
+                return
+            } catch {
+                guard ticket == generation, !Task.isCancelled else { return }
+            }
         }
         if !fallbackAttempted,let manifest,let compatible=compatibleVideo(manifest.video,forceCompatible:true) {
             fallbackAttempted=true
@@ -435,14 +629,14 @@ import HarborCore
         await open(video:target,cid:next.cid,library:library,episodes:episodes)
     }
     func stop() {
-        persist();generation=UUID();monitor?.cancel();monitor=nil;player.pause();player.replaceCurrentItem(with:nil)
+        persist();generation=UUID();switchingTracks=nil;lastPlayableVideo=nil;lastPlayableAudio=nil;monitor?.cancel();monitor=nil;player.pause();player.replaceCurrentItem(with:nil)
         seconds=0;duration=0;playing=false;loading=false;ended=false;manifest=nil;selectedVideo=nil;selectedAudio=nil
         video=nil;cid=0
-        cancelAutoNext();showNextPreview=false;minimized=false;miniBarHidden=false;liveQualities=[];liveQuality=0;liveRoomID=nil;stopLiveChat()
-        danmaku=[];subtitles=[];subtitleChoices=[];subtitleID="";episodes=[];episodesLoading=false;videoComments=[];commentsAid=0;commentsOpen=false;videoTint=nil
+        cancelAutoNext();showNextPreview=false;minimized=false;miniBarHidden=false;liveQualities=[];liveQuality=0;liveRoomID=nil;liveRecovery=nil;liveURLs=[];liveURLIndex=0;stopLiveChat()
+        danmaku=[];subtitles=[];subtitleChoices=[];subtitleID="";episodes=[];episodesLoading=false;commentsAid=0;commentsOpen=false
         NowPlayingCenter.shared.clear()
     }
-    func shutdown() async { stop();await gateway.stop() }
+    func shutdown() async { cancelPreload();stop();await gateway.stop() }
     private func loadTimedText(bvid:String,cid:Int,ticket:UUID) async {
         do {
             var request=URLRequest(url:URL(string:"https://comment.bilibili.com/\(cid).xml")!)
@@ -459,14 +653,6 @@ import HarborCore
             let data=try await BiliAPI.shared.subtitleInfo(bvid:bvid,cid:cid)
             guard generation==ticket else { return };subtitleChoices=data["subtitle"]["subtitles"].array
         } catch { /* no subtitle is a valid state */ }
-    }
-    /// 视频评论区（供播放器悬浮面板使用）。
-    func loadComments(video:Video) async {
-        var aid=video.aid
-        if aid==0,let detail=try? await BiliAPI.shared.detail(video.bvid) { aid=detail["aid"].int }
-        guard aid != 0,let data=try? await BiliAPI.shared.comments(aid:aid) else { return }
-        commentsAid=aid
-        videoComments=data["replies"].array
     }
     func ensureEpisodes() async throws {
         if !episodes.isEmpty {return}

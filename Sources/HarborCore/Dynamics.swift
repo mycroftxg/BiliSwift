@@ -12,6 +12,12 @@ public struct DynamicItem:Identifiable,Sendable,Hashable {
     public let video:Video?
     public let likes:Int
     public let comments:Int
+    public let commentTarget: CommentTarget?
+
+    public struct CommentTarget: Sendable, Hashable {
+        public let oid: String
+        public let type: Int
+    }
     public init?(_ j:JSON) {
         let modules=j["modules"]
         let author=modules["module_author"]
@@ -41,5 +47,13 @@ public struct DynamicItem:Identifiable,Sendable,Hashable {
         } else { video=nil }
         likes=modules["module_stat"]["like"]["count"].int
         comments=modules["module_stat"]["comment"]["count"].int
+        let basic = j["basic"]
+        let oid = basic["comment_id_str"].string
+        let type = basic["comment_type"].int
+        if type > 0, let value = UInt64(oid), value > 0 {
+            commentTarget = CommentTarget(oid: oid, type: type)
+        } else {
+            commentTarget = nil
+        }
     }
 }

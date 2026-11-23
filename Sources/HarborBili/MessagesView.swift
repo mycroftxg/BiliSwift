@@ -114,7 +114,7 @@ struct MessagesView: View {
             .map(\.int).first(where: { $0 > 0 })
         let message = [reply["content"]["message"].string, source["content"].string, context]
             .first(where: { !$0.isEmpty }) ?? (tab == "like" ? "给你点了个赞" : "收到一条消息")
-        let video = linkedVideo(user: user, reply: reply, source: source)
+        let video = linkedVideo(reply: reply, source: source)
 
         return HStack(alignment: .top, spacing: 14) {
             AvatarView(source: user["avatar"].string, size: 36)
@@ -162,7 +162,7 @@ struct MessagesView: View {
         .padding(.vertical, 14)
     }
 
-    private func linkedVideo(user: JSON, reply: JSON, source: JSON) -> Video? {
+    private func linkedVideo(reply: JSON, source: JSON) -> Video? {
         let link = [source["uri"], reply["uri"], source["source"]].map(\.string)
             .first { $0.range(of: "BV[0-9A-Za-z]{10}", options: .regularExpression) != nil }
         guard let link, let range = link.range(of: "BV[0-9A-Za-z]{10}", options: .regularExpression) else {
@@ -172,8 +172,7 @@ struct MessagesView: View {
             "bvid": .string(String(link[range])),
             "aid": .number(Double(source["source"].int != 0 ? source["source"].int : reply["oid"].int)),
             "title": .string(source["title"].string.isEmpty ? reply["title"].string : source["title"].string),
-            "pic": .string(source["image_urls"].array.first?.string ?? ""),
-            "author": .string(user["nickname"].string), "mid": user["mid"]
+            "pic": .string(source["image_urls"].array.first?.string ?? "")
         ]))
     }
 }

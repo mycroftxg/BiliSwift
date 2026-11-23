@@ -16,7 +16,7 @@ import HarborCore
     let audio=try #require(manifest.audio.filter { $0.codec.hasPrefix("mp4a") }.first)
     let gateway=MediaGateway()
     do {
-        let url=try await gateway.prepare(video:track,audio:audio)
+        let url=try await gateway.prepare(video:track,audio:audio,warmAt:0)
         #expect(url.host=="127.0.0.1")
         let (master,response)=try await URLSession.shared.data(from:url)
         #expect((response as? HTTPURLResponse)?.statusCode==200)
@@ -146,7 +146,14 @@ import HarborCore
     let stream=try await api.liveStream(room)
     let gateway=MediaGateway()
     do {
-        let url=try await gateway.prepareLive(stream.url)
+        var preparedURL: URL?
+        for source in stream.urls {
+            if let url = try? await gateway.prepareLive(source) {
+                preparedURL = url
+                break
+            }
+        }
+        let url = try #require(preparedURL)
         let (data,response)=try await URLSession.shared.data(from:url)
         #expect((response as? HTTPURLResponse)?.statusCode==200)
         let playlist=String(decoding:data,as:UTF8.self)
@@ -184,9 +191,9 @@ import HarborCore
     let roomID=try #require(Int(ProcessInfo.processInfo.environment["HARBOR_CHAT_ROOM"] ?? ""))
     var received=false
     var status=""
-    let chat=LiveChat(onStatus:{ status=$0 }) { _,_,_ in received=true }
+    let chat=LiveChat(onStatus:{ status=$0 }) { _,_,_,_ in received=true }
     defer { chat.disconnect() }
-    try await chat.connect(roomID:roomID)
+    chat.connect(roomID:roomID)
     for _ in 0..<100 {
         if received || status.contains("失败") { break }
         try await Task.sleep(for:.milliseconds(200))
@@ -231,4 +238,11 @@ import HarborCore
     let otherRow = "<li><clipboard-copy value=\"sha256:\(otherDigest)\"></clipboard-copy></li>"
     #expect(UpdateController.releasePageDigest(in: otherRow + expectedRow, assetPath: path) == digest)
     #expect(UpdateController.releasePageDigest(in: otherRow, assetPath: path) == nil)
+}
+
+@Test @MainActor func liveChatEmoteUsesTrustedImageAndPreservesFallback() {
+    let metadata = JSON.object(["url": .string("//i0.hdslb.com/bfs/emote/example.png")])
+    #expect(LiveChat.emotes(in: metadata, text: "[大笑]") == ["[大笑]": "https://i0.hdslb.com/bfs/emote/example.png"])
+    #expect(LiveChat.emotes(in: metadata, text: "普通文本").isEmpty)
+    #expect(LiveChat.emotes(in: .object(["url": .string("https://example.com/image.png")]), text: "[大笑]").isEmpty)
 }

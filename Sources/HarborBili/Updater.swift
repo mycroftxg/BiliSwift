@@ -188,15 +188,10 @@ import CryptoKit
                     try? FileManager.default.removeItem(at: folder)
                     throw error
                 }
-                do {
-                    try await install(dmg: destination, version: release.version)
-                } catch {
-                    _ = try? Self.run("/usr/bin/xattr",["-dr","com.apple.quarantine",destination.path])
-                    _ = NSWorkspace.shared.open(destination)
-                    status = "安装包已校验并打开，请拖入「应用程序」；BiliSwift 将退出以便替换。\n\(error.localizedDescription)"
-                    try? await Task.sleep(for:.milliseconds(900))
-                    NSApplication.shared.terminate(nil)
+                guard NSWorkspace.shared.open(destination) else {
+                    throw UpdateError("安装包已验证，但无法打开磁盘映像")
                 }
+                status = "安装包已验证。请退出 BiliSwift，再从磁盘映像覆盖安装。"
                 return
             } catch {
                 failures.append("\(candidate.rawValue)：\(error.localizedDescription)")
@@ -204,72 +199,6 @@ import CryptoKit
         }
         status = "发现新版本 \(release.version)"
         if !Task.isCancelled { error = failures.joined(separator: "\n") }
-    }
-
-    /// 校验 DMG 内的 App，生成延时安装脚本后退出应用；由脚本完成替换并重启。
-    private func install(dmg:URL,version:String) async throws {
-        let fm=FileManager.default
-        let appURL=Bundle.main.bundleURL
-        let work=fm.temporaryDirectory.appendingPathComponent("BiliSwiftInstall-\(UUID().uuidString)",isDirectory:true)
-        let mount=work.appendingPathComponent("mnt",isDirectory:true)
-        try fm.createDirectory(at:mount,withIntermediateDirectories:true)
-        try await Task.detached(priority:.userInitiated) {
-            _=try Self.run("/usr/bin/hdiutil",["attach",dmg.path,"-nobrowse","-readonly","-mountpoint",mount.path])
-            let items=(try? fm.contentsOfDirectory(at:mount,includingPropertiesForKeys:nil)) ?? []
-            guard let source=items.first(where:{$0.pathExtension=="app"}) else {
-                throw UpdateError("磁盘映像中未找到 BiliSwift.app")
-            }
-            let info=NSDictionary(contentsOf:source.appendingPathComponent("Contents/Info.plist"))
-            guard info?["CFBundleShortVersionString"] as? String == version else {
-                throw UpdateError("安装包版本与发布记录不一致")
-            }
-            _=try Self.run("/usr/bin/codesign",["--verify","--deep","--strict",source.path])
-            let stage=work.appendingPathComponent("BiliSwift.app")
-            _=try Self.run("/usr/bin/ditto",[source.path,stage.path])
-            _=try? Self.run("/usr/bin/xattr",["-dr","com.apple.quarantine",stage.path])
-            func quote(_ value:String)->String { "'" + value.replacingOccurrences(of:"'",with:"'\\''") + "'" }
-            let script=work.appendingPathComponent("install.sh")
-            let text="""
-#!/bin/sh
-PID=\(getpid())
-DEST=\(quote(appURL.path))
-SRC=\(quote(stage.path))
-MOUNT=\(quote(mount.path))
-WORK=\(quote(work.path))
-DMG=\(quote(dmg.path))
-while /bin/kill -0 "$PID" 2>/dev/null; do /bin/sleep 0.2; done
-/bin/rm -rf "$DEST"
-/usr/bin/ditto "$SRC" "$DEST" || exit 1
-/usr/bin/xattr -dr com.apple.quarantine "$DEST" 2>/dev/null
-/usr/bin/codesign --verify --deep --strict "$DEST" >/dev/null 2>&1 || /usr/bin/codesign --force --deep --sign - "$DEST" >/dev/null 2>&1
-/usr/bin/hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1
-/bin/rm -rf "$WORK" "$DMG"
-/usr/bin/open "$DEST"
-"""
-            try text.write(to:script,atomically:true,encoding:.utf8)
-            try fm.setAttributes([.posixPermissions:0o755],ofItemAtPath:script.path)
-            let process=Process()
-            process.executableURL=URL(fileURLWithPath:"/bin/sh")
-            process.arguments=[script.path]
-            try process.run()
-        }.value
-        status="安装程序已启动，BiliSwift 将退出并自动重启…"
-        try? await Task.sleep(for:.milliseconds(500))
-        NSApplication.shared.terminate(nil)
-    }
-
-    @discardableResult
-    nonisolated static func run(_ executable:String,_ arguments:[String]) throws -> String {
-        let process=Process()
-        process.executableURL=URL(fileURLWithPath:executable)
-        process.arguments=arguments
-        let pipe=Pipe()
-        process.standardOutput=pipe;process.standardError=pipe
-        try process.run();process.waitUntilExit()
-        let data=pipe.fileHandleForReading.readDataToEndOfFile()
-        let output=String(decoding:data,as:UTF8.self)
-        guard process.terminationStatus==0 else { throw UpdateError(output.isEmpty ? "\(executable) 执行失败" : output) }
-        return output
     }
 
     private static func requireOK(_ response: URLResponse) throws {

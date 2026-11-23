@@ -3,15 +3,12 @@ import HarborCore
 
 @MainActor @Observable final class DetailModel {
     var detail:JSON = .null
-    var comments:[JSON]=[]
     var related:[Video]=[]
     var loading=false
     var busy=false
     var error:String?
     var notice:String?
     var liked=false
-    var commentPage=1
-    var hasMoreComments=true
     var pages:[Episode] { detail["pages"].array.map(Episode.init) }
     var collectionTitle:String { detail["ugc_season"]["title"].string }
     var collectionEpisodes:[CollectionEpisode] {
@@ -21,19 +18,9 @@ import HarborCore
         loading=true;defer { loading=false }
         do { detail=try await BiliAPI.shared.detail(video.bvid) } catch { self.error=error.localizedDescription;return }
         loading=false
-        let aid=detail["aid"].int != 0 ? detail["aid"].int:video.aid
-        async let commentRequest=BiliAPI.shared.comments(aid:aid)
         async let relatedRequest=BiliAPI.shared.related(video.bvid)
-        do { comments=try await commentRequest["replies"].array } catch { notice="评论暂不可用：\(error.localizedDescription)" }
         do { related=try await relatedRequest } catch { /* detail remains usable */ }
         do { liked=try await BiliAPI.shared.request("/x/web-interface/archive/has/like",["bvid":video.bvid]).int==1 } catch { /* guest */ }
-    }
-    func moreComments(_ video:Video) async {
-        guard !busy,hasMoreComments else { return };busy=true;defer { busy=false }
-        let aid=detail["aid"].int != 0 ? detail["aid"].int:video.aid
-        do { let next=commentPage+1;let data=try await BiliAPI.shared.comments(aid:aid,page:next)["replies"].array
-            comments += data;commentPage=next;hasMoreComments = !data.isEmpty
-        } catch { self.error=error.localizedDescription }
     }
     func perform(_ path:String,_ params:[String:String],success:String) async -> Bool {
         guard !busy else { return false };busy=true;defer { busy=false }

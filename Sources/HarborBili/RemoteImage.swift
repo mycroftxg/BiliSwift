@@ -114,12 +114,13 @@ struct RemoteImage:View {
     var square:Bool=false
     var showsPlaceholderIcon:Bool=true
     var fit:Bool=false
-    @State private var image:NSImage?
+    private var imageKey: String { "\(source)|\(width)|\(square)" }
+    @State private var loadedImage: (key: String, image: NSImage?)?
     var body:some View {
         Group {
             if let cached=RemoteImageStore.shared.cached(source,width:width,height:square ? width:nil) {
                 Image(nsImage:cached).resizable().modifier(ImageFit(fit:fit))
-            } else if let image {
+            } else if loadedImage?.key == imageKey, let image = loadedImage?.image {
                 Image(nsImage:image).resizable().modifier(ImageFit(fit:fit))
             } else {
                 Rectangle().fill(.quaternary).overlay {
@@ -127,11 +128,12 @@ struct RemoteImage:View {
                 }
             }
         }.clipped()
-        .task(id:source) {
-            guard !source.isEmpty else { image=nil;return }
+        .task(id: imageKey) {
+            let key = imageKey
+            guard !source.isEmpty else { loadedImage=nil;return }
             let loaded=await RemoteImageStore.shared.image(source,width:width,height:square ? width:nil)
             guard !Task.isCancelled else { return }
-            image=loaded
+            loadedImage = (key, loaded)
         }
     }
 }

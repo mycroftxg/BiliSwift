@@ -17,12 +17,15 @@ extension View { func shelfBleed(_ margin:CGFloat=32)->some View { modifier(Shel
 struct VideoShelf:View {
     let videos:[Video]
     var cardWidth:CGFloat=270
+    var suppressHover = false
+    @State private var scrolling = false
     var body:some View {
         ScrollView(.horizontal) {
             LazyHStack(alignment:.top,spacing:20) {
-                ForEach(videos) {video in NavigationLink(value:AppRoute.video(video)) {VideoCard(video:video).frame(width:cardWidth)}.buttonStyle(.plain)}
+                ForEach(videos) {video in NavigationLink(value:AppRoute.video(video)) {VideoCard(video:video, suppressHover: suppressHover || scrolling).frame(width:cardWidth)}.buttonStyle(.plain)}
             }.scrollTargetLayout()
         }.scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
+            .onScrollPhaseChange { _, phase in scrolling = phase != .idle }
             .shelfBleed(32)
     }
 }
@@ -79,6 +82,14 @@ struct HeroCarousel:View {
                 else if value.translation.width > 50 {step(by:-1)}
             })
             .onHover {hovered=$0}
+            .onDisappear {
+                captionTask?.cancel()
+                captionTask = nil
+                captionVideo = nil
+                captionOffset = 0
+                captionOpacity = 1
+                switching = false
+            }
             .task(id:slides.map(\.id).joined(separator:",")) {
                 guard !slides.isEmpty else { return }
                 // 低电量模式只预取当前一张；正常模式预取全部，切换更顺。
@@ -88,7 +99,7 @@ struct HeroCarousel:View {
                     await prefetch(video)
                 }
             }
-            .task(id:"\(active)|\(slides.map(\.id).joined(separator:","))") {
+            .task(id:"\(active)|\(reduceMotion)|\(preferences.values.lowPowerMode)|\(slides.map(\.id).joined(separator:","))") {
                 guard active,slides.count>1,!reduceMotion,!preferences.values.lowPowerMode,!ProcessInfo.processInfo.isLowPowerModeEnabled else{return}
                 while !Task.isCancelled {
                     do {try await Task.sleep(for:.seconds(6))}catch{return}
@@ -102,9 +113,9 @@ struct HeroCarousel:View {
             guard let seasonID=video.seasonID,
                   let detail=try? await BiliAPI.shared.season(seasonID),
                   !Task.isCancelled else { return }
-            _ = await TMDBPosters.shared.backdrop(for:video,detail:detail,token:preferences.values.tmdbToken)
+            _ = await TMDBPosters.shared.backdrop(for:video,detail:detail,token:preferences.values.activeTMDBToken)
         } else {
-            _ = await RemoteImageStore.shared.image(video.cover,width:1280)
+            _ = await RemoteImageStore.shared.image(video.cover,width:1920)
         }
     }
     private func step(by offset:Int) {
@@ -131,9 +142,9 @@ struct HeroCarousel:View {
             guard !Task.isCancelled else { switching=false;return }
             captionVideo=slides[target]
             captionOffset=24;captionOpacity=0
-            withAnimation(.easeInOut(duration:0.7)) { index=target }
-            withAnimation(.easeOut(duration:0.5)) { captionOffset=0;captionOpacity=1 }
-            try? await Task.sleep(for:.milliseconds(780))
+            withAnimation(.easeInOut(duration:0.38)) { index=target }
+            withAnimation(.easeOut(duration:0.28)) { captionOffset=0;captionOpacity=1 }
+            try? await Task.sleep(for:.milliseconds(430))
             guard !Task.isCancelled else { return }
             switching=false
         }

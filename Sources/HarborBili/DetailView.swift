@@ -11,6 +11,10 @@ struct DetailView:View {
     @Environment(AppPreferences.self) private var preferences
     @Environment(WindowPresentation.self) private var presentation
     @State private var model=DetailModel()
+    @State private var commentStore = CommentStore()
+    @State private var commentOrder = BiliAPI.CommentOrder.hot
+    @State private var sendingComment = false
+    @State private var commentError: String?
     @State private var collectionLimit=30
     @State private var cid=0
     @State private var login=false
@@ -23,6 +27,9 @@ struct DetailView:View {
     @State private var viewport=CGSize(width:1000,height:800)
     @State private var descExpanded=false
     private var heroHeight:CGFloat { viewport.width * 9 / 16 }
+    private var displayVideo: Video {
+        model.detail["bvid"].string == video.bvid ? Video(model.detail) : video
+    }
     var body:some View {
         ScrollView {
             VStack(alignment:.leading,spacing:0) {
@@ -85,6 +92,12 @@ struct DetailView:View {
                 ToolbarItem(placement:.primaryAction) { if !presentation.immersive { ShareLink(item:URL(string:"https://www.bilibili.com/video/\(video.bvid)")!) { Image(systemName:"square.and.arrow.up") } } }
             }
             .task(id:video.bvid) { presentation.toolbarOverCover=true;await model.load(video);if preferences.values.autoPlay,playback.video?.bvid != video.bvid { await playFirst() } }
+            .task(id: preloadRequestID) {
+                guard let episode = preloadEpisode else { return }
+                let target = episode.video ?? video
+                let position = preferences.values.resume ? library.progress(target.bvid, cid: episode.cid) : 0
+                playback.preloadVideo(target, cid: episode.cid, position: position)
+            }
             .sheet(isPresented:$login) { LoginSheet().environment(account) }
             .sheet(isPresented:$favorite) { FavoriteSheet(video:video).environment(account) }
             .confirmationDialog("向这个视频投 1 枚硬币？",isPresented:$coinConfirm,titleVisibility:.visible) {
@@ -112,25 +125,56 @@ struct DetailView:View {
             HStack(alignment:.firstTextBaseline,spacing:10) {
                 Text("评论").font(.system(size:25,weight:.bold))
                 if model.detail["stat"]["reply"].int>0 { Text(model.detail["stat"]["reply"].int,format:.number).font(.subheadline).foregroundStyle(.secondary) }
+                Spacer()
+                CommentOrderPicker(order: $commentOrder)
             }
             HStack(alignment:.top,spacing:14) {
                 AvatarView(source:account.avatar,size:40)
                 VStack(alignment:.trailing,spacing:10) {
                     TextField("分享你的想法…",text:$comment,axis:.vertical).font(.system(size:14)).lineLimit(2...6).textFieldStyle(.plain).padding(14).background(.quaternary.opacity(0.4),in:.rect(cornerRadius:14))
-                    Button("发布评论") { requireLogin { commentConfirm=true } }.buttonStyle(.glassProminent).disabled(model.busy || comment.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                    Button("发布评论") { requireLogin { commentConfirm=true } }.buttonStyle(.glassProminent).disabled(sendingComment || commentStore.aid == 0 || comment.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
                 }
             }
-            if model.comments.isEmpty { Text("暂无评论，或评论尚未加载。").font(.callout).foregroundStyle(.secondary) }
-            LazyVStack(alignment:.leading,spacing:0) {
-                ForEach(model.comments.indices,id:\.self) { index in
-                    CommentRow(entry:model.comments[index],aid:video.aid,onLike:{ entry in
-                        requireLogin { Task { _=await model.perform("/x/v2/reply/action",["oid":"\(video.aid)","type":"1","rpid":entry["rpid"].string,"action":"1"],success:"已赞评论") } }
-                    },onLogin:{login=true}).id(model.comments[index]["rpid"].string)
+            if let commentError { Text(commentError).foregroundStyle(.red) }
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(commentStore.comments, id: \.commentIdentity) { entry in
+                    CommentRow(entry: entry, aid: commentStore.aid, onLike: { entry in
+                        requireLogin {
+                            Task {
+                                _ = await model.perform("/x/v2/reply/action",
+                                    ["oid": "\(commentStore.aid)", "type": "1", "rpid": entry.commentIdentity, "action": "1"],
+                                    success: "已赞评论")
+                            }
+                        }
+                    }, onLogin: { login = true })
                 }
             }
-            if !model.comments.isEmpty { AutoLoadFooter(hasMore:model.hasMoreComments,loading:model.busy) { await model.moreComments(video) } }
-        }.frame(maxWidth:920,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading)
+            if let error = commentStore.error {
+                HStack {
+                    Text(error).foregroundStyle(.secondary)
+                    Button("重试") {
+                        Task {
+                            if commentStore.aid > 0 { await commentStore.loadMore() }
+                            else { await reloadComments() }
+                        }
+                    }
+                }
+            } else if !commentStore.loading, commentStore.comments.isEmpty {
+                Text("暂无评论").foregroundStyle(.secondary)
+            } else {
+                AutoLoadFooter(hasMore: commentStore.hasMore, loading: commentStore.loading) {
+                    await commentStore.loadMore()
+                }
+            }
+        }
+        .frame(maxWidth: 920, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: "\(video.bvid)|\(commentOrder)|\(account.mid)") { await reloadComments() }
     }
+
+    private func reloadComments() async {
+        await commentStore.start(aid: video.aid, bvid: video.bvid, order: commentOrder)
+    }
+
     private var detailHero:some View {
         GeometryReader { geometry in
             ZStack(alignment:.bottomLeading) {
@@ -142,7 +186,7 @@ struct DetailView:View {
                 VStack(alignment:.leading,spacing:15) {
                     if heroHeight>=450,!model.detail["tname"].string.isEmpty { Text(model.detail["tname"].string).font(.caption.weight(.semibold)).padding(.horizontal,10).padding(.vertical,5).glassEffect(.regular,in:.capsule) }
                     Text(video.title).font(.system(size:max(24,min(36,geometry.size.width*0.036)),weight:.bold)).lineLimit(heroHeight<420 ? 2:3).frame(maxWidth:textWidth,alignment:.leading)
-                    HStack(spacing:8) { NavigationLink(value:AppRoute.creator(Creator(mid:video.mid,name:video.author,avatar:model.detail["owner"]["face"].string))) { HStack(spacing:8) {AvatarView(source:model.detail["owner"]["face"].string,size:24);Text(video.author).font(.subheadline.weight(.medium))} }.buttonStyle(.plain);Text("·  "+video.viewLabel).font(.subheadline).foregroundStyle(.white.opacity(0.7)) }
+                    HStack(spacing:8) { NavigationLink(value:AppRoute.creator(Creator(mid:displayVideo.mid,name:displayVideo.author,avatar:model.detail["owner"]["face"].string))) { HStack(spacing:8) {AvatarView(source:model.detail["owner"]["face"].string,size:24);Text(displayVideo.author).font(.subheadline.weight(.medium))} }.buttonStyle(.plain);if !displayVideo.viewLabel.isEmpty { Text("·  "+displayVideo.viewLabel).font(.subheadline).foregroundStyle(.white.opacity(0.7)) } }
                     Text(model.detail["desc"].string).font(.system(size:14)).lineSpacing(4)
                         .lineLimit(heroHeight<450 ? 1:2)
                         .frame(maxWidth:textWidth,alignment:.leading)
@@ -178,6 +222,17 @@ struct DetailView:View {
             return Episode(video:video,cid:ep.cid,title:ep.title,page:ep.index+1)
         }
     }
+    private var preloadEpisode: Episode? {
+        let episodes = seriesEpisodes
+        if !model.collectionEpisodes.isEmpty {
+            return episodes.first { $0.video?.bvid == video.bvid } ?? episodes.first
+        }
+        return model.pages.first { $0.cid == playback.cid && playback.video?.bvid == video.bvid } ?? model.pages.first
+    }
+
+    private var preloadRequestID: String {
+        "\(video.bvid)|\(preloadEpisode?.cid ?? 0)|\(preferences.values.quality)|\(preferences.values.codec)|\(preferences.values.preferredFormat)|\(preferences.values.lowPowerMode)"
+    }
     private func requireLogin(_ action:()->Void) { if account.loggedIn { action() } else { login=true } }
     private func playFirst() async {
         if model.pages.isEmpty,model.collectionEpisodes.isEmpty { await model.load(video) }
@@ -199,7 +254,19 @@ struct DetailView:View {
         await play(mapped)
     }
     private func sendComment() async {
-        if await model.perform("/x/v2/reply/add",["oid":"\(video.aid)","type":"1","message":comment,"plat":"1"],success:"评论已提交") { comment="";await model.load(video) }
+        guard !sendingComment else { return }
+        let text = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        sendingComment = true
+        commentError = nil
+        defer { sendingComment = false }
+        do {
+            _ = try await BiliAPI.shared.postVideoComment(aid: commentStore.aid, text: text)
+            if comment.trimmingCharacters(in: .whitespacesAndNewlines) == text { comment = "" }
+            await reloadComments()
+        } catch {
+            commentError = error.localizedDescription
+        }
     }
     private func sendDanmaku() async {
         guard account.loggedIn else { login=true;return };guard !postingDM else { return }

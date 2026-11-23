@@ -177,7 +177,7 @@ struct NativeSearchView:View {
                   alignment: .leading, spacing: 26) {
             ForEach(videos) { video in
                 Button { onVideo(video) } label: {
-                    VideoCard(video: video, seasonBackdropToken: video.isSeason ? preferences.values.tmdbToken : nil)
+                    VideoCard(video: video, seasonBackdropToken: video.isSeason ? preferences.values.activeTMDBToken : nil)
                 }.buttonStyle(.plain)
             }
         }

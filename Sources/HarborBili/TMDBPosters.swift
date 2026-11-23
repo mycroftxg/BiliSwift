@@ -1,5 +1,6 @@
 import SwiftUI
 import HarborCore
+import CryptoKit
 
 /// 按片名和年份查找同一条 TMDB 记录的两种图片。
 @MainActor final class TMDBPosters {
@@ -11,11 +12,21 @@ import HarborCore
             self = seasonType == 2 || seasonType == 3 ? .movie : .tv
         }
     }
-    struct Artwork {
+    struct Artwork: Codable, Sendable {
         var poster:String?
         var backdrop:String?
     }
-    private var cache:[String:Artwork]=[:]
+    private struct Cached: Codable {
+        let artwork: Artwork
+        let expires: Date
+    }
+    private static let cacheURL = URL.cachesDirectory.appending(path: "BiliSwift/tmdb-artwork.json")
+    private var cache: [String: Cached] = {
+        guard let data = try? Data(contentsOf: cacheURL),
+              let entries = try? JSONDecoder().decode([String: Cached].self, from: data) else { return [:] }
+        return entries.filter { $0.value.expires > .now }
+    }()
+
     private var inflight:[String:Task<Artwork,Never>]=[:]
 
     static func year(from text: String) -> Int? {
@@ -33,19 +44,54 @@ import HarborCore
         guard !value.isEmpty else { return Artwork() }
         let trimmed=title.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return Artwork() }
-        let normalized=trimmed.replacingOccurrences(of:" ",with:"")
-        if year == nil,normalized.count<=3 { return Artwork() }
-        let key=value+"|"+kind.rawValue+"|"+trimmed+"|"+(year.map(String.init) ?? "")
-        if let hit=cache[key] { return hit }
+        let fingerprint = SHA256.hash(data: Data(value.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
+        let key = "\(fingerprint)|\(kind.rawValue)|\(trimmed)|\(year ?? 0)"
+        if let hit = cache[key], hit.expires > .now { return hit.artwork }
         if let task=inflight[key] { return await task.value }
         let task=Task<Artwork,Never> {
-            await Self.search(title:trimmed,token:value,kind:kind,year:year)
+            let result = await Self.search(title: trimmed, token: value, kind: kind, year: year)
+            if let result {
+                let found = result.poster != nil || result.backdrop != nil
+                self.cache[key] = Cached(artwork: result, expires: Date().addingTimeInterval(found ? 604800 : 1800))
+                if self.cache.count > 600 {
+                    self.cache = Dictionary(uniqueKeysWithValues: self.cache.sorted { $0.value.expires > $1.value.expires }.prefix(500).map { ($0.key, $0.value) })
+                }
+                if found { self.saveCache() }
+            }
+            return result ?? self.cache[key]?.artwork ?? Artwork()
         }
         inflight[key]=task
         let result=await task.value
         inflight[key]=nil
-        cache[key]=result
         return result
+    }
+
+    private func saveCache() {
+        let entries = cache
+        let url = Self.cacheURL
+        pendingSave?.cancel()
+        pendingSave = Task.detached(priority: .utility) {
+            do {
+                try await Task.sleep(for: .milliseconds(400))
+                let data = try JSONEncoder().encode(entries)
+                try Task.checkCancellation()
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+            } catch {}
+        }
+    }
+
+    private var pendingSave: Task<Void, Never>?
+
+    static func validate(token: String) async throws {
+        var request = URLRequest(url: URL(string: "https://api.themoviedb.org/3/configuration")!, timeoutInterval: 8)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw BiliError.invalid("TMDB 没有返回有效响应") }
+        guard http.statusCode == 200 else {
+            if [401, 403].contains(http.statusCode) { throw BiliError.invalid("TMDB 未接受此令牌") }
+            throw BiliError.http(http.statusCode)
+        }
     }
 
     func backdrop(for video: Video, detail: JSON, token: String, width: Int = 1920) async -> NSImage? {
@@ -58,7 +104,8 @@ import HarborCore
         return await SeasonArtwork.load(preferred: artwork.backdrop, fallback: fallback, width: width, portrait: false)
     }
 
-    private static func search(title:String,token:String,kind:Kind,year:Int?) async -> Artwork {
+    private static func search(title:String,token:String,kind:Kind,year:Int?) async -> Artwork? {
+        var complete = true
         for language in ["zh-CN","en-US"] {
             var components=URLComponents(string:"https://api.themoviedb.org/3/search/\(kind.rawValue)")!
             components.queryItems=[.init(name:"query",value:title),.init(name:"language",value:language),.init(name:"include_adult",value:"false"),.init(name:"page",value:"1")]
@@ -70,7 +117,7 @@ import HarborCore
             guard let (data,response)=try? await URLSession.shared.data(for:request),
                   (response as? HTTPURLResponse)?.statusCode==200,
                   let root=try? JSONSerialization.jsonObject(with:data) as? [String:Any],
-                  let results=root["results"] as? [[String:Any]] else { continue }
+                  let results=root["results"] as? [[String:Any]] else { complete = false; continue }
             if let item = matchingTitle(in: results, title: title, year: year) {
                 return Artwork(
                     poster: imageURL(item["poster_path"], size: "w780"),
@@ -78,7 +125,7 @@ import HarborCore
                 )
             }
         }
-        return Artwork()
+        return complete ? Artwork() : nil
     }
     private static func imageURL(_ field: Any?, size: String) -> String? {
         guard let path = field as? String, path.hasPrefix("/") else { return nil }
@@ -141,7 +188,7 @@ struct PosterCard:View {
                 }
             }
         }.buttonStyle(.plain)
-        .task(id: video.bvid + "|" + token) {
+        .task(id: video.bvid + "|" + kind.rawValue + "|" + token) {
             let poster = await TMDBPosters.shared.poster(title: video.title, token: token, kind: kind)
             let selected = await SeasonArtwork.load(preferred: poster, fallback: [video.cover], width: 720, portrait: true)
             guard !Task.isCancelled else { return }
@@ -155,7 +202,7 @@ struct PosterGrid:View {
     let videos:[Video]
     var token:String=""
     var kind:TMDBPosters.Kind = .tv
-    private var signature:String { videos.map(\.bvid).joined(separator:",") }
+    private var signature:String { videos.prefix(24).map(\.bvid).joined(separator:",") + "|" + kind.rawValue + "|" + token }
     var body:some View {
         LazyVGrid(columns:[GridItem(.adaptive(minimum:170,maximum:230),spacing:20)],alignment:.leading,spacing:26) {
             ForEach(videos) { video in
@@ -168,7 +215,7 @@ struct PosterGrid:View {
             await withTaskGroup(of:Void.self) { group in
                 var iterator=batch.makeIterator()
                 func addNext() {
-                    guard let video=iterator.next() else { return }
+                    guard !Task.isCancelled, let video=iterator.next() else { return }
                     group.addTask { _=await TMDBPosters.shared.poster(title:video.title,token:token,kind:kind,year:nil) }
                 }
                 for _ in 0..<4 { addNext() }
@@ -194,9 +241,16 @@ struct SeasonArtwork: View {
         .accessibilityHidden(true)
     }
 
+    private static func smallerTMDBImage(_ source: String) -> String? {
+        guard URL(string: source)?.host == "image.tmdb.org" else { return nil }
+        if source.contains("/w780/") { return source.replacingOccurrences(of: "/w780/", with: "/w500/") }
+        if source.contains("/w1280/") { return source.replacingOccurrences(of: "/w1280/", with: "/w780/") }
+        return nil
+    }
+
     @MainActor static func load(preferred: String?, fallback: [String], width: Int, portrait: Bool) async -> NSImage? {
         var alternate: NSImage?
-        for source in [preferred].compactMap({ $0 }) + fallback where !source.isEmpty {
+        for source in [preferred, preferred.flatMap(Self.smallerTMDBImage)].compactMap({ $0 }) + fallback where !source.isEmpty {
             guard !Task.isCancelled else { return nil }
             guard let image = await RemoteImageStore.shared.image(source, width: width) else { continue }
             let ratio = image.size.width / image.size.height

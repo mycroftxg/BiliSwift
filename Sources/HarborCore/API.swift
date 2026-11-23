@@ -12,7 +12,7 @@ public actor BiliAPI {
         config.httpShouldSetCookies = false
         session = URLSession(configuration: config)
     }
-    public func setCookie(_ value: String) { cookie = value; mixin = nil }
+    public func setCookie(_ value: String) { cookie = value; mixin = nil; seasonSession = UUID() }
     public func cookieHeader() -> String { cookie }
     public func cookieValue(_ name:String) -> String? {
         for part in cookie.split(separator:";") {
@@ -139,7 +139,23 @@ public actor BiliAPI {
         let number=Double(value.filter { $0.isNumber || $0=="." }) ?? 0
         return number*unit
     }
-    public func season(_ id:Int) async throws -> JSON { try await request("/pgc/view/web/season",["season_id":"\(id)"]) }
+    private struct SeasonRequest: Hashable {
+        let id: Int
+        let session: UUID
+    }
+    private var seasonSession = UUID()
+    private var pendingSeasons: [SeasonRequest: Task<JSON, Error>] = [:]
+
+    public func season(_ id: Int) async throws -> JSON {
+        let key = SeasonRequest(id: id, session: seasonSession)
+        if let pending = pendingSeasons[key] { return try await pending.value }
+        let pending = Task {
+            try await request("/pgc/view/web/season", ["season_id": String(id)])
+        }
+        pendingSeasons[key] = pending
+        defer { pendingSeasons[key] = nil }
+        return try await pending.value
+    }
     public func searchSuggestions(_ term: String) async throws -> [String] {
         var components = URLComponents(string: "https://s.search.bilibili.com/main/suggest")!
         components.queryItems = [.init(name: "term", value: term)]
@@ -259,13 +275,40 @@ public actor BiliAPI {
     public func dynamics(offset:String="") async throws -> JSON {
         try await request("/x/polymer/web-dynamic/v1/feed/all",["type":"all","offset":offset,"page":"1","features":"itemOpusStyle"])
     }
+    public enum CommentOrder: Int, CaseIterable, Sendable {
+        case latest = 2
+        case hot = 3
+    }
     public func comments(oid:Int,type:Int=1,page:Int=1) async throws -> JSON {
         try await request("/x/v2/reply",["type":"\(type)","oid":"\(oid)","pn":"\(page)","sort":"2"])
     }
-    public func dynamicComments(oid:Int,next:Int=0) async throws -> JSON {
-        try await request("/x/v2/reply/main",["type":"17","oid":"\(oid)","mode":"3","next":"\(next)","ps":"20","plat":"1","web_location":"333.999"],signed:true)
+    public func sortedComments(oid: String, type: Int = 1, order: CommentOrder, offset: String = "") async throws -> JSON {
+        let pagination = try JSONEncoder().encode(["offset": offset])
+        return try await request("/x/v2/reply/wbi/main", [
+            "oid": oid, "type": "\(type)", "mode": "\(order.rawValue)",
+            "pagination_str": String(decoding: pagination, as: UTF8.self), "plat": "1", "web_location": "1315875"
+        ], signed: true)
     }
-    public func comments(aid: Int, page: Int = 1) async throws -> JSON { try await comments(oid:aid,type:1,page:page) }
+    public func dynamicDetail(_ id: String) async throws -> DynamicItem? {
+        let data = try await request("/x/polymer/web-dynamic/v1/detail", ["id": id, "features": "itemOpusStyle"])
+        return DynamicItem(data["item"])
+    }
+    public func dynamicComments(_ target: DynamicItem.CommentTarget, next: Int = 0) async throws -> JSON {
+        try await request("/x/v2/reply/main", ["type": "\(target.type)", "oid": target.oid, "mode": "3",
+            "next": "\(next)", "ps": "20", "plat": "1"])
+    }
+    public func dynamicComments(_ target: DynamicItem.CommentTarget, page: Int) async throws -> JSON {
+        try await request("/x/v2/reply", ["type": "\(target.type)", "oid": target.oid, "pn": "\(page)", "sort": "2"])
+    }
+    public func comments(aid: Int, page: Int = 1) async throws -> JSON {
+        try await comments(oid: aid, page: page)
+    }
+    public func postVideoComment(aid: Int, text: String) async throws -> JSON {
+        guard aid > 0, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BiliError.invalid("评论内容为空或视频不可用。")
+        }
+        return try await request("/x/v2/reply/add", ["oid": "\(aid)", "type": "1", "message": text, "plat": "1"], post: true)
+    }
     public func heartbeat(bvid: String, cid: Int, seconds: Int) async throws {
         _ = try await request("/x/click-interface/web/heartbeat", ["bvid":bvid,"cid":"\(cid)","played_time":"\(seconds)","play_type":"1","type":"3"],post:true)
     }

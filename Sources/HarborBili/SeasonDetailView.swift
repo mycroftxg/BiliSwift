@@ -93,6 +93,13 @@ struct SeasonDetailView:View {
                 ToolbarItem(placement:.primaryAction) { if !presentation.immersive { ShareLink(item:URL(string:"https://www.bilibili.com/bangumi/play/ss\(seasonID)")!) { Image(systemName:"square.and.arrow.up") } } }
             }
             .task(id:seasonID) { await load() }
+            .task(id: "\(selected["id"].int)|\(preferences.values.quality)|\(preferences.values.codec)|\(preferences.values.preferredFormat)|\(preferences.values.lowPowerMode)") {
+                guard selected["id"].int > 0 else { return }
+                let target = Video.episode(selected, seasonID: seasonID, seasonTitle: title)
+                let cid = selected["cid"].int
+                let position = preferences.values.resume ? library.progress(target.bvid, cid: cid) : 0
+                playback.preloadVideo(target, cid: cid, position: position)
+            }
             .sheet(isPresented:$login) { LoginSheet().environment(account) }
             .sheet(isPresented:$replying) { ReplyComposer(aid:selected["aid"].int,root:"0",parent:"0",name:"本集").environment(account) }
     }
@@ -100,12 +107,12 @@ struct SeasonDetailView:View {
         presentation.toolbarOverCover=true;loading=true;defer {loading=false}
         do {
             detail=try await BiliAPI.shared.season(seasonID)
-            let image = await TMDBPosters.shared.backdrop(for: video, detail: detail, token: preferences.values.tmdbToken)
+            followed=detail["user_status"]["follow"].int==1
+            selected=episodes.first(where:{$0["id"].int==video.episodeID}) ?? episodes.first ?? .null
+            let image = await TMDBPosters.shared.backdrop(for: video, detail: detail, token: preferences.values.activeTMDBToken)
             guard !Task.isCancelled else { return }
             heroImage = image
             heroReady=true
-            followed=detail["user_status"]["follow"].int==1
-            selected=episodes.first(where:{$0["id"].int==video.episodeID}) ?? episodes.first ?? .null
             if selected["aid"].int>0 { await loadComments(selected) }
         } catch { heroReady=true;failure=error.localizedDescription }
     }

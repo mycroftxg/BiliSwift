@@ -14,7 +14,6 @@ struct PlayerPanel:View {
     @State private var scrubbing=false
     @State private var scrub:Double=0
     @State private var controlsVisible=true
-    @State private var liveChatVisible=true
     @State private var lastInteraction=Date()
     @State private var popover:PlayerPopover?
     @State private var draft=""
@@ -25,12 +24,14 @@ struct PlayerPanel:View {
     @State private var episodeFailure:String?
     @State private var liking=false
     @State private var liked=false
-    @State private var holdingLike=false
-    @State private var tripling=false
-    @State private var holdProgress:CGFloat=0
-    @State private var holdDone=false
-    @State private var holdStage=0
-    @State private var longPressedAt=Date.distantPast
+    @GestureState private var likePointerDown = false
+    @State private var likePress: Task<Void, Never>?
+    @State private var likePressCancelled = false
+    @State private var likePressSubmitted = false
+    @State private var holdProgress: CGFloat = 0
+    @State private var triplePending = false
+    @State private var likeRevision = UUID()
+    private let likeHoldDuration = 0.85
     @FocusState private var focused:Bool
     var body:some View {
         GeometryReader { geometry in
@@ -55,17 +56,7 @@ struct PlayerPanel:View {
                         insertion:.move(edge:.trailing).combined(with:.opacity),
                         removal:.move(edge:.trailing).combined(with:.opacity)
                     ))
-                    .animation(.spring(response:0.62,dampingFraction:0.9),value:controller.showNextPreview)
-                }
-                if controller.video?.roomID != nil,liveChatVisible {
-                    HStack { Spacer();LiveChatPanel(messages:controller.liveMessages,status:controller.liveChatStatus) }
-                        .padding(.top,88).padding(.trailing,24).padding(.bottom,150)
-                        .allowsHitTesting(true)
-                        .transition(.asymmetric(
-                            insertion:.move(edge:.trailing).combined(with:.opacity),
-                            removal:.move(edge:.trailing).combined(with:.opacity)
-                        ))
-                        .animation(.spring(response:0.55,dampingFraction:0.9),value:liveChatVisible)
+                    .animation(reduceMotion ? nil : .spring(response:0.42,dampingFraction:0.93),value:controller.showNextPreview)
                 }
                 VStack { Spacer();if !controller.subtitle.isEmpty {
                     Text(controller.subtitle).font(.system(size:preferences.values.subtitleSize,weight:.medium))
@@ -108,7 +99,7 @@ struct PlayerPanel:View {
                 }
             }
             .environment(\.colorScheme,.dark)
-            .animation(.easeInOut(duration:0.2),value:controlsVisible)
+            .animation(reduceMotion ? nil : .easeInOut(duration:0.18),value:controlsVisible)
             .onChange(of:controller.notice,initial:true) { _, value in
                 if let value,!value.isEmpty { showToast(value);Task { @MainActor in controller.notice=nil } }
             }
@@ -127,17 +118,23 @@ struct PlayerPanel:View {
                 if immersive { focused=true }
                 while !Task.isCancelled {
                     do { try await Task.sleep(for:.milliseconds(300)) } catch { return }
-                    let hide=preferences.values.autoHide && controller.playing && !controller.loading && controller.error==nil && !scrubbing && popover==nil && Date().timeIntervalSince(lastInteraction)>1.0
+                    let hide=preferences.values.autoHide && controller.playing && !controller.loading && controller.error==nil && !scrubbing && !likePointerDown && !liking && popover==nil && Date().timeIntervalSince(lastInteraction)>1.0
                     if hide,controlsVisible { hideControls() }
                     if !controller.playing,!controlsVisible { controlsVisible=true }
                 }
             }
             .task(id:controller.video?.bvid) {
+                resetLikePress()
                 liked=false
+                let revision = likeRevision
                 if let video=controller.video,video.roomID==nil {
-                    do {let value=try await BiliAPI.shared.request("/x/web-interface/archive/has/like",["bvid":video.bvid]);if controller.video?.bvid==video.bvid {liked=value.int==1}} catch {}
+                    do {let value=try await BiliAPI.shared.request("/x/web-interface/archive/has/like",["bvid":video.bvid]);if !Task.isCancelled, controller.video?.bvid == video.bvid, likeRevision == revision { liked = value.int == 1 }} catch {}
                 }
             }
+            .onChange(of: likePointerDown) { _, down in
+                if !down { resetLikePress() }
+            }
+            .onDisappear { resetLikePress() }
             .onChange(of:preferences.values.danmaku) { _,value in controller.showDanmaku=value }
     }
     private func controls(size:CGSize)->some View {
@@ -152,49 +149,7 @@ struct PlayerPanel:View {
                     }
                     Spacer()
                     if controller.video?.roomID == nil {
-                        Button {
-                            if Date().timeIntervalSince(longPressedAt)>1.6 { submitLike(triple:false) }
-                        } label:{
-                            HStack(spacing:14) {
-                                Image(systemName:liked ? "hand.thumbsup.fill":"hand.thumbsup")
-                                    .contentTransition(.symbolEffect(.replace)).symbolEffect(.bounce,value:liked)
-                                if tripling {
-                                    Image(systemName:"yensign.circle.fill")
-                                        .opacity(holdStage>=1 ? 1:0.22)
-                                        .scaleEffect(holdStage>=1 ? 1:0.7)
-                                        .symbolEffect(.bounce,value:holdStage>=1)
-                                    Image(systemName:"star.fill")
-                                        .opacity(holdStage>=2 ? 1:0.22)
-                                        .scaleEffect(holdStage>=2 ? 1:0.7)
-                                        .symbolEffect(.bounce,value:holdStage>=2)
-                                }
-                                if holdStage>=3 { Text("三连成功").font(.system(size:12,weight:.semibold)).transition(.opacity.combined(with:.scale)) }
-                            }
-                            .font(.system(size:16,weight:.medium))
-                            .animation(.snappy(duration:0.22),value:holdStage)
-                            .foregroundStyle(liked ? Color.pink:Color.white)
-                            .frame(width:holdStage>=3 ? 214:(tripling ? 176:36),height:36)
-                            .overlay {
-                                Capsule().trim(from:0,to:holdProgress).stroke(.white.opacity(0.9),lineWidth:1.5)
-                                    .opacity(tripling ? 1:0)
-                            }
-                            .animation(.snappy(duration:0.25),value:tripling)
-                            .animation(.linear(duration:1.6),value:holdProgress)
-                        }.buttonStyle(.glass).buttonBorderShape(.capsule).disabled(liking)
-                            .help("点赞 · 长按 1.6 秒一键三连").accessibilityLabel("点赞，长按一键三连")
-                            .onLongPressGesture(minimumDuration:1.6,maximumDistance:24) {
-                                longPressedAt=Date();holdDone=true;holdStage=3;submitLike(triple:true)
-                                Task { try? await Task.sleep(for:.seconds(1.1));withAnimation(.snappy(duration:0.25)) { tripling=false;holdProgress=0;holdStage=0 } }
-                            } onPressingChanged:{ pressing in
-                                if pressing {
-                                    holdDone=false;holdStage=0
-                                    withAnimation(.snappy(duration:0.25)) { tripling=true }
-                                    holdProgress=1
-                                    Task { try? await Task.sleep(for:.milliseconds(520));if tripling { holdStage=1 };try? await Task.sleep(for:.milliseconds(520));if tripling { holdStage=2 } }
-                                } else if !holdDone {
-                                    withAnimation(.snappy(duration:0.25)) { tripling=false;holdProgress=0;holdStage=0 }
-                                }
-                            }
+                        likeButton
                     }
                     HStack(spacing:10) {
                         Button { controller.setVolume(controller.volume>0 ? 0:preferences.values.volume) } label:{ Image(systemName:controller.volume==0 ? "speaker.slash.fill":"speaker.wave.2.fill") }.buttonStyle(.plain).accessibilityLabel("静音或恢复音量")
@@ -274,7 +229,7 @@ struct PlayerPanel:View {
         GlassEffectContainer(spacing:6) {
             HStack(spacing:compact ? 5:8) {
                 if controller.video?.roomID != nil {
-                    iconButton(liveChatVisible ? "bubble.left.and.bubble.right.fill":"bubble.left.and.bubble.right",label:liveChatVisible ? "隐藏实时评论区":"显示实时评论区",compact:compact) { withAnimation(.snappy(duration:0.25)) { liveChatVisible.toggle() } }
+                    iconButton(controller.commentsOpen ? "bubble.left.and.bubble.right.fill":"bubble.left.and.bubble.right",label:controller.commentsOpen ? "隐藏实时评论区":"显示实时评论区",compact:compact) { withAnimation(.snappy(duration:0.25)) { controller.commentsOpen.toggle() } }
                     iconButton("arrow.clockwise",label:"重新连接直播",compact:compact) { Task { await controller.retryLive() } }
                 } else {
                     iconButton("text.bubble.fill",label:controller.commentsOpen ? "隐藏评论":"显示评论",compact:compact) { withAnimation(.snappy(duration:0.3)) { controller.commentsOpen.toggle() } }
@@ -420,17 +375,109 @@ struct PlayerPanel:View {
         if let range=raw.range(of:" 高码率") { return String(raw[..<range.lowerBound])+"+（高码率）" }
         return raw
     }
-    private func submitLike(triple:Bool) {
-        guard !liking,let video=controller.video else {return};liking=true
-        Task { defer {liking=false}
+    private var likeButton: some View {
+        Button { submitLike(triple: false) } label: {
+            ZStack {
+                if liking {
+                    ProgressView().controlSize(.small).tint(.white)
+                } else {
+                    Image(systemName: liked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(liked ? Color.pink : Color.white)
+                }
+
+                if holdProgress > 0, !liking {
+                    Circle().trim(from: 0, to: reduceMotion ? 1 : holdProgress)
+                        .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .padding(2)
+                }
+            }
+            .frame(width: 36, height: 36)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .help("单击点赞，长按一键三连")
+        .accessibilityLabel(liked ? "取消点赞" : "点赞")
+        .accessibilityValue(triplePending ? "正在三连" : "")
+        .accessibilityAction(named: Text("一键三连")) { submitLike(triple: true) }
+        .contextMenu {
+            Button("一键三连", systemImage: "hand.thumbsup.fill") { submitLike(triple: true) }
+        }
+        .highPriorityGesture(likePressGesture)
+    }
+
+    private var likePressGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .updating($likePointerDown) { _, down, _ in down = true }
+            .onChanged { value in
+                guard !liking, !likePressCancelled, !likePressSubmitted else { return }
+                guard hypot(value.translation.width, value.translation.height) <= 10 else {
+                    resetLikePress()
+                    likePressCancelled = true
+                    return
+                }
+                guard likePress == nil, let video = controller.video else { return }
+                reveal()
+                withAnimation(reduceMotion ? nil : .linear(duration: likeHoldDuration)) { holdProgress = 1 }
+                likePress = Task {
+                    do { try await Task.sleep(for: .seconds(likeHoldDuration)) } catch { return }
+                    guard !Task.isCancelled, controller.video?.bvid == video.bvid else { return }
+                    likePressSubmitted = true
+                    submitLike(triple: true)
+                }
+            }
+            .onEnded { value in
+                let shouldLike = likePress != nil && !likePressSubmitted && !likePressCancelled
+                    && hypot(value.translation.width, value.translation.height) <= 10
+                    && CGRect(x: 0, y: 0, width: 36, height: 36).contains(value.location)
+                resetLikePress()
+                if shouldLike { submitLike(triple: false) }
+            }
+    }
+
+    private func resetLikePress() {
+        likePress?.cancel()
+        likePress = nil
+        likePressCancelled = false
+        likePressSubmitted = false
+        holdProgress = 0
+    }
+
+    private func submitLike(triple: Bool) {
+        guard !liking, let video = controller.video, video.roomID == nil else { return }
+        let wasLiked = liked
+        likeRevision = UUID()
+        liking = true
+        triplePending = triple
+        reveal()
+        Task {
+            defer { liking = false; triplePending = false }
             do {
-                let response=try await BiliAPI.shared.request(triple ? "/x/web-interface/archive/like/triple":"/x/web-interface/archive/like",["bvid":video.bvid,"like":liked ? "2":"1"],post:true)
-                guard controller.video?.bvid==video.bvid else {return}
+                let response: JSON
                 if triple {
-                    liked=response["like"].bool
-                    controller.notice="三连结果：点赞\(response["like"].bool ? "✓":"未完成") · 投币\(response["coin"].bool ? "✓":"未完成") · 收藏\(response["fav"].bool ? "✓":"未完成")"
-                } else {liked.toggle();controller.notice=liked ? "已点赞":"已取消点赞"}
-            } catch {controller.notice=error.localizedDescription+"；如结果不确定，请先刷新确认，避免重复操作。"}
+                    response = try await BiliAPI.shared.request("/x/web-interface/archive/like/triple", ["bvid": video.bvid], post: true)
+                } else {
+                    response = try await BiliAPI.shared.request("/x/web-interface/archive/like", ["bvid": video.bvid, "like": wasLiked ? "2" : "1"], post: true)
+                }
+                guard controller.video?.bvid == video.bvid else { return }
+                if triple {
+                    liked = response["like"].bool
+                    let coin = response["coin"].bool
+                    let favorite = response["fav"].bool
+                    var remaining: [String] = []
+                    if !liked { remaining.append("点赞") }
+                    if !coin { remaining.append("投币") }
+                    if !favorite { remaining.append("收藏") }
+                    controller.notice = remaining.isEmpty ? "三连成功" : "未完成：\(remaining.joined(separator: "、"))"
+                } else {
+                    liked = !wasLiked
+                }
+            } catch {
+                guard controller.video?.bvid == video.bvid else { return }
+                controller.notice = error.localizedDescription
+            }
         }
     }
     private func reveal() {
@@ -448,7 +495,7 @@ struct PlayerPanel:View {
         }
     }
     private func hideControls() {
-        guard preferences.values.autoHide,controller.playing,popover==nil,!scrubbing else { return }
+        guard preferences.values.autoHide,controller.playing,popover==nil,!scrubbing,!likePointerDown,!liking else { return }
         withAnimation(reduceMotion ? nil:.easeOut(duration:0.22)) { controlsVisible=false }
         if immersive || presentation.fullScreen {
             // 用系统"隐藏直到鼠标移动"：指针不会在全局卡死，任何移动都会自动恢复。
@@ -537,7 +584,7 @@ struct DanmakuOverlay:View {
                     }
                 }
             }.clipped()
-                .task(id:"\(Int(geometry.size.width))|\(laneCount)|\(fontSize)|\(density)|\(speed)|\(reduceMotion)|\(items.count)") {
+                .task(id:"\(Int(geometry.size.width))|\(laneCount)|\(fontSize)|\(density)|\(speed)|\(reduceMotion)|\(items.count)|\(items.last?.id ?? -1)") {
                     let comments=reduceMotion ? items.map {Danmaku(id:$0.id,time:$0.time,text:$0.text,mode:$0.mode==4 ? 4:5,color:$0.color)}:items
                     let width=geometry.size.width,size=fontSize,capacity=density,multiplier=speed
                     let build=Task.detached(priority:.userInitiated) {DanmakuTimeline(comments:comments,viewport:width,fontSize:size,density:capacity,lanes:laneCount,speedMultiplier:multiplier)}
@@ -556,78 +603,185 @@ private struct PlayerSizing:ViewModifier {
     }
 }
 
-struct LiveChatPanel:View {
-    let messages:[PlaybackController.LiveMessage]
-    let status:String
-    var body:some View {
-        ScrollViewReader { proxy in
+private struct PlayerCommentSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content
+            .background(Color(white: 0.11).opacity(reduceTransparency ? 1 : 0.72))
+            .glassEffect(.regular.tint(.black.opacity(0.12)), in: .rect(cornerRadius: 16))
+            .clipShape(.rect(cornerRadius: 16))
+            .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.09)) }
+            .environment(\.colorScheme, .dark)
+    }
+}
+
+private struct PlayerCommentCloseButton: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 30, height: 30)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .help("收起评论")
+        .accessibilityLabel("收起评论")
+    }
+}
+
+struct LiveChatPanel: View {
+    let messages: [PlaybackController.LiveMessage]
+    let status: String
+    var onClose: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("实时评论").font(.title3.bold()).foregroundStyle(.white)
+                Spacer()
+                PlayerCommentCloseButton(onClose: onClose)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            Divider().opacity(0.25)
             ScrollView {
-                LazyVStack(alignment:.leading,spacing:7) {
-                    ForEach(messages) { message in
-                        HStack(alignment:.top,spacing:6) {
-                            Text(message.user.isEmpty ? "观众":message.user+":")
-                                .font(.caption.weight(.semibold)).foregroundStyle(.cyan).lineLimit(1)
-                            Text(message.text).font(.caption).foregroundStyle(.white.opacity(0.92)).fixedSize(horizontal:false,vertical:true)
-                        }.frame(maxWidth:.infinity,alignment:.leading).id(message.id)
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if messages.isEmpty {
+                        Text(status).font(.callout).foregroundStyle(.white.opacity(0.6))
                     }
-                    if messages.isEmpty { Text(status).font(.caption).foregroundStyle(.white.opacity(0.6)) }
-                }.padding(14)
+                    ForEach(messages) { message in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(message.user.isEmpty ? "观众" : message.user)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                                .lineLimit(1)
+                            CommentTextView(text: message.text, emotes: message.emotes)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                    }
+                }.padding(16)
             }
-            .frame(width:280)
-            .frame(maxHeight:340)
-            .glassEffect(.regular,in:.rect(cornerRadius:16))
-            .onChange(of:messages.last?.id) { _,_ in
-                if let last=messages.last { withAnimation(.easeOut(duration:0.2)) { proxy.scrollTo(last.id,anchor:.bottom) } }
+            .defaultScrollAnchor(.bottom)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: messages.last?.id)
+        }
+        .frame(maxHeight: .infinity)
+        .modifier(PlayerCommentSurface())
+        .padding(.vertical, 8).padding(.trailing, 8)
+    }
+}
+
+struct CommentSidebar: View {
+    let aid: Int
+    let bvid: String
+    var onClose: () -> Void
+    @State private var store = CommentStore()
+    @State private var order = BiliAPI.CommentOrder.hot
+    @State private var draft = ""
+    @State private var sending = false
+    @State private var sendError: String?
+    @State private var showLogin = false
+    @Environment(AccountSession.self) private var account
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("评论").font(.title3.bold())
+                Spacer()
+                CommentOrderPicker(order: $order)
+                PlayerCommentCloseButton(onClose: onClose)
             }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            Divider().opacity(0.25)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    ForEach(store.comments, id: \.commentIdentity) { comment in
+                        PlayerCommentRow(comment: comment, replies: store.replies[comment["rpid"].int] ?? [],
+                                         loading: store.loadingReplies.contains(comment["rpid"].int), aid: store.aid,
+                                         onExpand: { root in Task { await store.loadReplies(root: root) } },
+                                         onReplied: { root in Task { await store.loadReplies(root: root, refresh: true) } })
+                    }
+                    if let error = store.error {
+                        HStack {
+                            Text(error).font(.callout).foregroundStyle(.secondary)
+                            Button("重试") {
+                                Task {
+                                    if store.aid > 0 { await store.loadMore() }
+                                    else { await store.start(aid: aid, bvid: bvid, order: order) }
+                                }
+                            }
+                        }
+                    } else if !store.loading, store.comments.isEmpty {
+                        Text("暂无评论").font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        AutoLoadFooter(hasMore: store.hasMore, loading: store.loading) { await store.loadMore() }
+                    }
+                }.padding(16)
+            }
+            .id(order)
+
+            Divider().opacity(0.25)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField("写评论…", text: $draft, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...4)
+                    Button("发送") { Task { await send() } }
+                        .buttonStyle(.glassProminent)
+                        .disabled(store.aid == 0 || sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let sendError { Text(sendError).font(.callout).foregroundStyle(.red) }
+            }
+            .padding(12)
+        }
+        .foregroundStyle(.white)
+        .modifier(PlayerCommentSurface())
+        .padding(.vertical, 8).padding(.trailing, 8)
+        .task(id: "\(aid)|\(bvid)|\(order)|\(account.mid)") {
+            await store.start(aid: aid, bvid: bvid, order: order)
+        }
+        .sheet(isPresented: $showLogin) { LoginSheet().environment(account) }
+    }
+
+    private func send() async {
+        guard !sending else { return }
+        guard account.loggedIn else { showLogin = true; return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, store.aid > 0 else { return }
+        sending = true
+        sendError = nil
+        defer { sending = false }
+        do {
+            _ = try await BiliAPI.shared.postVideoComment(aid: store.aid, text: text)
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+            await store.start(aid: aid, bvid: bvid, order: order)
+        } catch {
+            sendError = error.localizedDescription
         }
     }
 }
 
-struct CommentSidebar:View {
-    let aid:Int
-    var bvid:String=""
-    var tint:Color?
-    let comments:[JSON]
-    var onClose:()->Void
-    @State private var store=CommentStore()
-    private var items:[JSON] { store.comments.isEmpty ? comments:store.comments }
-    var body:some View {
-        VStack(spacing:0) {
-            HStack(spacing:8) {
-                Text("评论").font(.title3.bold()).foregroundStyle(.white)
-                Text("\(items.count)").font(.callout).foregroundStyle(.white.opacity(0.6)).contentTransition(.numericText()).animation(.snappy,value:items.count)
-                Spacer()
-                Button { onClose() } label:{ Image(systemName:"xmark").font(.system(size:13,weight:.semibold)).frame(width:30,height:30) }
-                    .buttonStyle(.glass).buttonBorderShape(.circle).help("收起评论").accessibilityLabel("收起评论")
-            }.padding(.horizontal,16).padding(.vertical,14)
-            Divider().opacity(0.25)
-            ScrollView {
-                LazyVStack(alignment:.leading,spacing:18) {
-                    ForEach(Array(items.enumerated()),id:\.offset) { _,comment in
-                        PlayerCommentRow(comment:comment,replies:store.replies[comment["rpid"].int] ?? [],loading:store.loadingReplies.contains(comment["rpid"].int),aid:aid,onExpand:{ root in
-                            Task { await store.loadReplies(root:root) }
-                        },onReplied:{ root in
-                            Task { await store.loadReplies(root:root) }
-                        })
-                        .onAppear { if comment["rpid"].int == items.last?["rpid"].int { Task { await store.loadMore() } } }
-                    }
-                    if store.loading { ProgressView().controlSize(.small).frame(maxWidth:.infinity).padding(.vertical,8) }
-                    if !store.hasMore,!items.isEmpty { Text("没有更多评论了").font(.caption).foregroundStyle(.white.opacity(0.6)).frame(maxWidth:.infinity).padding(.vertical,10) }
-                    if items.isEmpty { Text("正在加载评论…").font(.callout).foregroundStyle(.white.opacity(0.6)) }
-                }.padding(16)
-            }
+struct CommentOrderPicker: View {
+    @Binding var order: BiliAPI.CommentOrder
+
+    var body: some View {
+        Picker("评论排序", selection: $order) {
+            Text("按热度").tag(BiliAPI.CommentOrder.hot)
+            Text("按时间").tag(BiliAPI.CommentOrder.latest)
         }
-        .padding(.vertical,10).padding(.trailing,10)
-        .background {
-            if let tint {
-                RadialGradient(colors:[tint.opacity(0.55),tint.opacity(0.12),.clear],center:.topTrailing,startRadius:8,endRadius:340)
-                    .blur(radius:34)
-            }
-        }
-        .glassEffect(.regular.tint((tint ?? .black).opacity(tint == nil ? 0.35:0.16)),in:.rect(cornerRadius:18))
-        .clipShape(.rect(cornerRadius:18))
-        .environment(\.colorScheme,.dark)
-        .task(id:"\(aid)-\(bvid)") { await store.start(aid:aid,bvid:bvid) }
+        .labelsHidden()
+        .fixedSize()
+    }
+}
+
+extension JSON {
+    var commentIdentity: String {
+        let exactID = self["rpid_str"].string
+        return exactID.isEmpty ? self["rpid"].string : exactID
     }
 }
 
